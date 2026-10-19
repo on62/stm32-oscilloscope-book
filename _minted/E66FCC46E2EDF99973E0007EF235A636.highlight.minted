@@ -1,5 +1,0 @@
-\begin{MintedVerbatim}[commandchars=\\\{\}]
-[stm32f4x.cpu] halted due to debug\PYGZhy{}request,
-current mode: Handler HardFault
-xPSR: 0x01000003 pc: 0x7461500a msp: 0x61725438
-\end{MintedVerbatim}

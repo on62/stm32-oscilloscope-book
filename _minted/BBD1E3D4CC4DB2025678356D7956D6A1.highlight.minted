@@ -1,5 +1,0 @@
-\begin{MintedVerbatim}[commandchars=\\\{\}]
-make\PYG{+w}{ }clean
-make
-make\PYG{+w}{ }flash
-\end{MintedVerbatim}

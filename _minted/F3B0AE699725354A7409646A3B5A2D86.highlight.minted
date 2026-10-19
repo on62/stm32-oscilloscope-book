@@ -1,3 +1,0 @@
-\begin{MintedVerbatim}[commandchars=\\\{\}]
-sudo\PYG{+w}{ }apt\PYG{+w}{ }install\PYG{+w}{ }openocd
-\end{MintedVerbatim}

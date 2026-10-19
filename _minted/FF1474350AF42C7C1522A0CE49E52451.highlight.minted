@@ -1,6 +1,0 @@
-\begin{MintedVerbatim}[commandchars=\\\{\}]
-Remote debugging using 127.0.0.1:3333
-warning: No executable has been specified and target does not support
-determining executable automatically.  Try using the \PYGZdq{}file\PYGZdq{} command.
-0x7461500a in ?? ()
-\end{MintedVerbatim}

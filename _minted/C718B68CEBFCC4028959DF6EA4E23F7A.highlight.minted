@@ -1,3 +1,0 @@
-\begin{MintedVerbatim}[commandchars=\\\{\}]
-(gdb) x/4z 0x20000000
-\end{MintedVerbatim}

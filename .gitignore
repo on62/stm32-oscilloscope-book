@@ -15,7 +15,7 @@
 *.pdf
 
 # minted
-_minted-*/
+_minted
 
 # OS
 .DS_Store

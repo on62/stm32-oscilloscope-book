@@ -1,9 +1,0 @@
-\begin{MintedVerbatim}[commandchars=\\\{\}]
-Found 1 stlink programmers
-  version:    V2J19S3
-  serial:     066CFF484849785087031235
-  flash:      524288 (pagesize: 16384)
-  sram:       98304
-  chipid:     0x433
-  dev\PYGZhy{}type:   STM32F401xD\PYGZus{}xE
-\end{MintedVerbatim}

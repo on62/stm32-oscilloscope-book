@@ -1,6 +1,0 @@
-\begin{MintedVerbatim}[commandchars=\\\{\}]
-st\PYGZhy{}flash 1.8.0
-2026\PYGZhy{}10\PYGZhy{}15T07:50:38 INFO common.c: STM32F401xD\PYGZus{}xE: 96 KiB SRAM, 512 KiB flash in at least 16 KiB pages.
-Mass erasing..........
-Mass erase completed successfully.
-\end{MintedVerbatim}

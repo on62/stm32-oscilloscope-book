@@ -1,3 +1,0 @@
-\begin{MintedVerbatim}[commandchars=\\\{\}]
-(gdb) x/8z 0x08000000
-\end{MintedVerbatim}
