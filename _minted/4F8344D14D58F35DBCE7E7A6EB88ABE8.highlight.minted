@@ -1,0 +1,49 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+\PYG{c+cp}{\PYGZsh{}}\PYG{c+cp}{include}\PYG{+w}{ }\PYG{c+cpf}{\PYGZlt{}stdint.h\PYGZgt{}}
+
+\PYG{k}{extern}\PYG{+w}{ }\PYG{k+kt}{uint32\PYGZus{}t}\PYG{+w}{ }\PYG{n}{\PYGZus{}estack}\PYG{p}{;}
+\PYG{k}{extern}\PYG{+w}{ }\PYG{k+kt}{uint32\PYGZus{}t}\PYG{+w}{ }\PYG{n}{\PYGZus{}sidata}\PYG{p}{,}\PYG{+w}{ }\PYG{n}{\PYGZus{}sdata}\PYG{p}{,}\PYG{+w}{ }\PYG{n}{\PYGZus{}edata}\PYG{p}{;}
+\PYG{k}{extern}\PYG{+w}{ }\PYG{k+kt}{uint32\PYGZus{}t}\PYG{+w}{ }\PYG{n}{\PYGZus{}sbss}\PYG{p}{,}\PYG{+w}{ }\PYG{n}{\PYGZus{}ebss}\PYG{p}{;}
+\PYG{k}{extern}\PYG{+w}{ }\PYG{k+kt}{int}\PYG{+w}{ }\PYG{n+nf}{main}\PYG{p}{(}\PYG{k+kt}{void}\PYG{p}{)}\PYG{p}{;}
+
+\PYG{k+kt}{void}\PYG{+w}{ }\PYG{n+nf}{Reset\PYGZus{}Handler}\PYG{p}{(}\PYG{k+kt}{void}\PYG{p}{)}\PYG{p}{;}
+\PYG{k+kt}{void}\PYG{+w}{ }\PYG{n+nf}{Default\PYGZus{}Handler}\PYG{p}{(}\PYG{k+kt}{void}\PYG{p}{)}\PYG{p}{;}
+
+\PYG{n}{\PYGZus{}\PYGZus{}attribute\PYGZus{}\PYGZus{}}\PYG{p}{(}\PYG{p}{(}\PYG{n}{section}\PYG{p}{(}\PYG{l+s}{\PYGZdq{}}\PYG{l+s}{.vector\PYGZus{}table}\PYG{l+s}{\PYGZdq{}}\PYG{p}{)}\PYG{p}{)}\PYG{p}{)}
+\PYG{k}{const}\PYG{+w}{ }\PYG{k+kt}{uint32\PYGZus{}t}\PYG{+w}{ }\PYG{n}{vector\PYGZus{}table}\PYG{p}{[}\PYG{p}{]}\PYG{+w}{ }\PYG{o}{=}\PYG{+w}{ }\PYG{p}{\PYGZob{}}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{o}{\PYGZam{}}\PYG{n}{\PYGZus{}estack}\PYG{p}{,}\PYG{+w}{          }\PYG{c+cm}{/* 0: Initial SP */}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{n}{Reset\PYGZus{}Handler}\PYG{p}{,}\PYG{+w}{     }\PYG{c+cm}{/* 1: Reset */}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{n}{Default\PYGZus{}Handler}\PYG{p}{,}\PYG{+w}{   }\PYG{c+cm}{/* 2: NMI */}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{n}{Default\PYGZus{}Handler}\PYG{p}{,}\PYG{+w}{   }\PYG{c+cm}{/* 3: HardFault */}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{n}{Default\PYGZus{}Handler}\PYG{p}{,}\PYG{+w}{   }\PYG{c+cm}{/* 4: MemManage */}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{n}{Default\PYGZus{}Handler}\PYG{p}{,}\PYG{+w}{   }\PYG{c+cm}{/* 5: BusFault */}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{n}{Default\PYGZus{}Handler}\PYG{p}{,}\PYG{+w}{   }\PYG{c+cm}{/* 6: UsageFault */}
+\PYG{+w}{    }\PYG{l+m+mi}{0}\PYG{p}{,}\PYG{+w}{ }\PYG{l+m+mi}{0}\PYG{p}{,}\PYG{+w}{ }\PYG{l+m+mi}{0}\PYG{p}{,}\PYG{+w}{ }\PYG{l+m+mi}{0}\PYG{p}{,}\PYG{+w}{                  }\PYG{c+cm}{/* 7\PYGZhy{}10: Reserved */}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{n}{Default\PYGZus{}Handler}\PYG{p}{,}\PYG{+w}{   }\PYG{c+cm}{/* 11: SVCall */}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{n}{Default\PYGZus{}Handler}\PYG{p}{,}\PYG{+w}{   }\PYG{c+cm}{/* 12: Debug Monitor */}
+\PYG{+w}{    }\PYG{l+m+mi}{0}\PYG{p}{,}\PYG{+w}{                           }\PYG{c+cm}{/* 13: Reserved */}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{n}{Default\PYGZus{}Handler}\PYG{p}{,}\PYG{+w}{   }\PYG{c+cm}{/* 14: PendSV */}
+\PYG{+w}{    }\PYG{p}{(}\PYG{k+kt}{uint32\PYGZus{}t}\PYG{p}{)}\PYG{n}{Default\PYGZus{}Handler}\PYG{p}{,}\PYG{+w}{   }\PYG{c+cm}{/* 15: SysTick */}
+\PYG{p}{\PYGZcb{}}\PYG{p}{;}
+
+\PYG{k+kt}{void}\PYG{+w}{ }\PYG{n+nf}{Reset\PYGZus{}Handler}\PYG{p}{(}\PYG{k+kt}{void}\PYG{p}{)}
+\PYG{p}{\PYGZob{}}
+\PYG{+w}{    }\PYG{c+cm}{/* Копируем .data из Flash в SRAM */}
+\PYG{+w}{    }\PYG{k+kt}{uint32\PYGZus{}t}\PYG{+w}{ }\PYG{o}{*}\PYG{n}{src}\PYG{+w}{ }\PYG{o}{=}\PYG{+w}{ }\PYG{o}{\PYGZam{}}\PYG{n}{\PYGZus{}sidata}\PYG{p}{;}
+\PYG{+w}{    }\PYG{k+kt}{uint32\PYGZus{}t}\PYG{+w}{ }\PYG{o}{*}\PYG{n}{dst}\PYG{+w}{ }\PYG{o}{=}\PYG{+w}{ }\PYG{o}{\PYGZam{}}\PYG{n}{\PYGZus{}sdata}\PYG{p}{;}
+\PYG{+w}{    }\PYG{k}{while}\PYG{+w}{ }\PYG{p}{(}\PYG{n}{dst}\PYG{+w}{ }\PYG{o}{\PYGZlt{}}\PYG{+w}{ }\PYG{o}{\PYGZam{}}\PYG{n}{\PYGZus{}edata}\PYG{p}{)}\PYG{+w}{ }\PYG{o}{*}\PYG{n}{dst}\PYG{o}{+}\PYG{o}{+}\PYG{+w}{ }\PYG{o}{=}\PYG{+w}{ }\PYG{o}{*}\PYG{n}{src}\PYG{o}{+}\PYG{o}{+}\PYG{p}{;}
+
+\PYG{+w}{    }\PYG{c+cm}{/* Обнуляем .bss */}
+\PYG{+w}{    }\PYG{n}{dst}\PYG{+w}{ }\PYG{o}{=}\PYG{+w}{ }\PYG{o}{\PYGZam{}}\PYG{n}{\PYGZus{}sbss}\PYG{p}{;}
+\PYG{+w}{    }\PYG{k}{while}\PYG{+w}{ }\PYG{p}{(}\PYG{n}{dst}\PYG{+w}{ }\PYG{o}{\PYGZlt{}}\PYG{+w}{ }\PYG{o}{\PYGZam{}}\PYG{n}{\PYGZus{}ebss}\PYG{p}{)}\PYG{+w}{ }\PYG{o}{*}\PYG{n}{dst}\PYG{o}{+}\PYG{o}{+}\PYG{+w}{ }\PYG{o}{=}\PYG{+w}{ }\PYG{l+m+mi}{0}\PYG{p}{;}
+
+\PYG{+w}{    }\PYG{n}{main}\PYG{p}{(}\PYG{p}{)}\PYG{p}{;}
+
+\PYG{+w}{    }\PYG{k}{while}\PYG{+w}{ }\PYG{p}{(}\PYG{l+m+mi}{1}\PYG{p}{)}\PYG{p}{;}
+\PYG{p}{\PYGZcb{}}
+
+\PYG{k+kt}{void}\PYG{+w}{ }\PYG{n+nf}{Default\PYGZus{}Handler}\PYG{p}{(}\PYG{k+kt}{void}\PYG{p}{)}
+\PYG{p}{\PYGZob{}}
+\PYG{+w}{    }\PYG{k}{while}\PYG{+w}{ }\PYG{p}{(}\PYG{l+m+mi}{1}\PYG{p}{)}\PYG{p}{;}
+\PYG{p}{\PYGZcb{}}
+\end{MintedVerbatim}

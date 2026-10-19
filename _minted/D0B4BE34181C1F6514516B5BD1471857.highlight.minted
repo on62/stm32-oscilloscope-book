@@ -1,0 +1,40 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+ENTRY(Reset\PYGZus{}Handler)
+
+MEMORY
+\PYGZob{}
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    SRAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 96K
+\PYGZcb{}
+
+/* Верхушка стека — конец SRAM */
+\PYGZus{}estack = ORIGIN(SRAM) + LENGTH(SRAM);
+
+SECTIONS
+\PYGZob{}
+    .text :
+    \PYGZob{}
+        KEEP(*(.vector\PYGZus{}table))
+        *(.text*)
+        *(.rodata*)
+    \PYGZcb{} \PYGZgt{} FLASH
+
+    /* Адрес, откуда копировать .data */
+    \PYGZus{}sidata = LOADADDR(.data);
+
+    .data :
+    \PYGZob{}
+        \PYGZus{}sdata = .;
+        *(.data*)
+        \PYGZus{}edata = .;
+    \PYGZcb{} \PYGZgt{} SRAM AT \PYGZgt{} FLASH
+
+    .bss :
+    \PYGZob{}
+        \PYGZus{}sbss = .;
+        *(.bss*)
+        *(COMMON)
+        \PYGZus{}ebss = .;
+    \PYGZcb{} \PYGZgt{} SRAM
+\PYGZcb{}
+\end{MintedVerbatim}

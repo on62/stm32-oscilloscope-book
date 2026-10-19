@@ -1,0 +1,1278 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch02-flashing.tex
+%  Прошивка STM32 из командной строки
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Прошивка STM32 из командной строки}
+\label{ch:flashing}
+
+\epigraph{<<Первая программа~--- всегда самая сложная.
+Не потому, что она сложная, а потому, что нужно
+настроить \emph{всё} окружение~--- и ни разу не
+ошибиться>>.}{}
+
+\section{Введение}
+\label{sec:flashing-intro}
+
+В \texttt{ch01} мы \emph{убедились}, что у нас есть
+\emph{всё} необходимое: Nucleo, Blue Pill, ST-Link,
+компьютер на Linux. Но пока мы \emph{ничего} не
+прошили. Платы лежат на столе, светодиоды мигают
+\emph{заводской} прошивкой, а мы~--- не понимаем,
+\emph{что} там внутри.
+
+Пришло время \textbf{прошить} первую программу.
+
+\begin{ideabox}
+\textbf{Зачем прошивать из командной строки?} Можно
+использовать STM32CubeIDE~--- <<большую>> IDE от ST.
+Она \emph{удобна}, но \emph{скрывает} детали: где
+лежит бинарник, какие флаги у компилятора, что делает
+линкер. Если вы хотите \emph{понимать}, что происходит~---
+командная строка даёт \emph{полный} контроль.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Какие инструменты нужны и как их установить.
+    \item Что такое ST-Link и SWD.
+    \item Как убедиться, что ST-Link видит плату.
+    \item Что делать, если в Flash лежит мусор.
+    \item Как стереть Flash.
+    \item Как записать и прочитать байты.
+    \item Как подключиться отладчиком и посмотреть регистры.
+    \item Как прошить первую программу~--- мигание LED.
+\end{itemize}
+
+\section{Инструменты}
+\label{sec:flashing-tools}
+
+Для работы с STM32 из командной строки нужно
+\emph{пять} инструментов.
+
+\subsection{ARM GCC: компилятор}
+
+\begin{center}
+\texttt{arm-none-eabi-gcc}
+\end{center}
+
+Это \textbf{кросс-компилятор}: работает на \emph{x86\_64} (ваш
+компьютер), а генерирует код для \emph{ARM Cortex-M}
+(STM32). <<\texttt{none-eabi}>> означает <<без операционной
+системы, с ABI EABI>>~--- то есть для \emph{микроконтроллеров},
+а не для полноценного Linux.
+
+\textbf{Установка}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo apt install gcc-arm-none-eabi binutils-arm-none-eabi
+\end{minted}
+
+\textbf{Проверка}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+arm-none-eabi-gcc --version
+\end{minted}
+
+\begin{keybox}
+\textbf{Почему не обычный \texttt{gcc}?} Обычный \texttt{gcc}
+компилирует код для \emph{вашего} компьютера~--- например,
+для x86\_64. Код для ARM он не умеет~--- нужен
+\emph{кросс-компилятор}. Это \emph{другой} GCC, собранный
+под ARM.
+\end{keybox}
+
+\subsection{GDB: отладчик}
+
+\begin{center}
+\texttt{gdb-multiarch}
+\end{center}
+
+Это \textbf{отладчик}. Он умеет \emph{подключаться} к
+STM32 через ST-Link, читать регистры, ставить точки
+останова, выполнять код \emph{по шагам}.
+
+\textbf{Установка}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo apt install gdb-multiarch
+\end{minted}
+
+\begin{warnbox}
+\textbf{Грабля: пакет \texttt{gdb-arm-none-eabi} удалён.}
+Начиная с \textbf{Debian 10}, пакет \texttt{gdb-arm-none-eabi}
+\emph{отсутствует}. Если вы попробуете его установить~---
+получите ошибку:
+\begin{minted}{text}
+Ошибка: Невозможно найти пакет gdb-arm-none-eabi
+\end{minted}
+\textbf{Решение:} установить \texttt{gdb-multiarch} и
+создать симлинк:
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo ln -s /usr/bin/gdb-multiarch /usr/bin/arm-none-eabi-gdb
+\end{minted}
+После этого команда \texttt{arm-none-eabi-gdb} будет работать.
+\end{warnbox}
+
+\subsection{stlink-tools: работа с ST-Link}
+
+\begin{center}
+\texttt{st-info}, \texttt{st-flash}, \texttt{st-util}
+\end{center}
+
+Это \textbf{набор утилит} для работы с ST-Link~---
+программатором STM32.
+
+\textbf{Установка}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo apt install stlink-tools
+\end{minted}
+
+\textbf{Три утилиты}:
+
+\begin{itemize}
+    \item \texttt{st-info --probe}~--- \emph{обнаружить}
+          ST-Link и показать информацию о чипе.
+    \item \texttt{st-flash}~--- \emph{прошить} Flash,
+          \emph{стереть}, \emph{прочитать}.
+    \item \texttt{st-util}~--- \emph{GDB-сервер}~---
+          подключается к ST-Link и транслирует запросы GDB.
+\end{itemize}
+
+\subsection{OpenOCD: альтернатива st-util}
+
+\begin{center}
+\texttt{openocd}
+\end{center}
+
+\textbf{OpenOCD} (Open On-Chip Debugger)~--- ещё один
+GDB-сервер. Мы используем его, потому что \texttt{st-util 1.8.0}
+\emph{несовместим} с \texttt{GDB 16.3}~--- читает Flash
+\emph{неправильно}.
+
+\textbf{Установка}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo apt install openocd
+\end{minted}
+
+\begin{notebox}
+\textbf{Зачем два GDB-сервера?} \texttt{st-util}~---
+\emph{родной} для stlink-tools, но старый. \texttt{OpenOCD}~---
+более \emph{современный}, поддерживает много разных
+адаптеров и целей. Если \texttt{st-util} работает~---
+можно им пользоваться. Но для \emph{наших} задач
+OpenOCD надёжнее.
+\end{notebox}
+
+\subsection{Сборка и git}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo apt install build-essential pkg-config git
+\end{minted}
+
+\begin{itemize}
+    \item \texttt{build-essential}~--- \texttt{gcc}, \texttt{make},
+          \texttt{binutils} для \emph{хоста}.
+    \item \texttt{pkg-config}~--- для поиска библиотек.
+    \item \texttt{git}~--- для клонирования репозиториев.
+\end{itemize}
+
+\subsection{Итоговая команда установки}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo apt install gcc-arm-none-eabi binutils-arm-none-eabi \
+                 gdb-multiarch stlink-tools openocd \
+                 build-essential pkg-config git
+\end{minted}
+
+\begin{keybox}
+\textbf{Что мы \emph{не} устанавливали?} STM32CubeIDE,
+STM32CubeMX, HAL-библиотеки. Для первой программы они
+\emph{не нужны}. Мы напишем всё \emph{сами}~---
+linker-скрипт, startup-код, мигание LED. Понимание
+того, \emph{как} это работает~--- важнее, чем удобство.
+\end{keybox}
+
+\section{ST-Link: программатор}
+\label{sec:flashing-stlink}
+
+\textbf{ST-Link}~--- это \emph{программатор} (или
+<<отладчик>>). Он подключается к компьютеру через USB
+и к STM32 через \textbf{SWD}. Через него мы \emph{заливаем}
+прошивку в Flash и \emph{отлаживаем} код.
+
+\subsection{SWD: четыре провода}
+
+\textbf{SWD} (Serial Wire Debug)~--- это \emph{протокол}
+отладки ARM. Он использует \emph{всего четыре} провода:
+
+\begin{itemize}
+    \item \textbf{GND}~--- <<земля>>.
+    \item \textbf{SWCLK}~--- тактовая линия.
+    \item \textbf{SWDIO}~--- линия данных.
+    \item \textbf{3.3V}~--- питание.
+\end{itemize}
+
+\begin{keybox}
+\textbf{SWD~--- это <<два провода для отладки>>.}
+SWCLK и SWDIO~--- тактовая и данные. По ним ST-Link
+передаёт команды <<прочитай память>>, <<запиши байт>>,
+<<останови процессор>>.
+\end{keybox}
+
+\subsection{Встроенный ST-Link на Nucleo}
+
+\textbf{NUCLEO-F401RE} имеет \emph{встроенный} ST-Link~---
+не нужен внешний программатор. Просто подключаете
+плату по USB~--- и всё работает.
+
+\begin{ideabox}
+\textbf{Nucleo~--- это два устройства на одной плате.}
+Одна половина~--- ST-Link (программатор). Другая~---
+STM32F401 (целевой чип). Они соединены \emph{внутри}
+платы по SWD. Наружу выходит только USB~---
+и вы можете с ним работать, как с обычным ST-Link.
+\end{ideabox}
+
+\textbf{Проверка}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+lsusb | grep -i st
+\end{minted}
+
+\textbf{Вывод} (наш случай):
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+Bus 001 Device 005: ID 0483:374b STMicroelectronics ST-LINK/V2.1
+\end{minted}
+
+\begin{itemize}
+    \item \texttt{0483}~--- \emph{Vendor ID} STMicroelectronics.
+    \item \texttt{374b}~--- \emph{Product ID} ST-Link/V2.1.
+\end{itemize}
+
+\subsection{Внешний ST-Link V2 для Blue Pill}
+
+Blue Pill~--- это \emph{просто} микроконтроллер.
+Программатора на нём \emph{нет}. Нужен внешний ST-Link V2.
+
+\textbf{Подключение}:
+
+\begin{center}
+\begin{tabular}{ll}
+ST-Link & Blue Pill \\
+\hline
+GND     & GND \\
+SWCLK   & PA14 \\
+SWDIO   & PA13 \\
+3.3V    & 3.3V \\
+\end{tabular}
+\end{center}
+
+\begin{warnbox}
+\textbf{Не подавайте 5 В на SWD.} Это \emph{сожжёт} STM32.
+Питание~--- только 3.3 В. Если сомневаетесь~--- измерьте
+мультиметром.
+\end{warnbox}
+
+\section{Первое подключение: \texttt{st-info --probe}}
+\label{sec:flashing-first-connect}
+
+\textbf{Прежде чем} прошивать~--- убедимся, что ST-Link
+\emph{видит} STM32. Это \emph{первый} шаг.
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+st-info --probe
+\end{minted}
+
+\textbf{Вывод} (наш реальный случай):
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+Found 1 stlink programmers
+  version:    V2J19S3
+  serial:     066CFF484849785087031235
+  flash:      524288 (pagesize: 16384)
+  sram:       98304
+  chipid:     0x433
+  dev-type:   STM32F401xD_xE
+\end{minted}
+
+Разберём \emph{каждое} поле.
+
+\subsection{Разбор вывода}
+
+\begin{itemize}
+    \item \texttt{Found 1 stlink programmers}~--- найдена
+          \emph{одна} ST-Link. \textbf{Важно:} если здесь
+          \texttt{2} или больше~--- у вас \emph{несколько}
+          ST-Link подключены. Отключите лишние.
+    \item \texttt{version: V2J19S3}~--- версия прошивки
+          ST-Link. V2~--- ST-Link V2. J19~--- версия
+          прошивки. S3~--- аппаратная ревизия.
+    \item \texttt{serial: 066CFF...}~--- \emph{серийный
+          номер} ST-Link. \textbf{Уникален.} Понадобится,
+          если у вас \emph{несколько} ST-Link.
+    \item \texttt{flash: 524288}~--- 512 КБ Flash
+          (\SI{524288}{\byte} = 512 КБ).
+    \item \texttt{pagesize: 16384}~--- размер страницы
+          Flash~--- 16 КБ. \emph{Важно}: при стирании
+          стирается \emph{вся} страница, а не отдельные
+          байты.
+    \item \texttt{sram: 98304}~--- 96 КБ SRAM.
+    \item \texttt{chipid: 0x433}~--- идентификатор чипа.
+          \texttt{0x433}~--- STM32F401.
+    \item \texttt{dev-type: STM32F401xD\_xE}~--- точное
+          название чипа.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Если \texttt{st-info --probe} показывает
+\emph{не тот} чип}~--- значит, вы подключились
+\emph{не к той} плате. Например, у вас есть Nucleo
+(F401) и Blue Pill (F103), и вы хотите работать
+с Nucleo, но подключились к Blue Pill.
+\end{keybox}
+
+\subsection{Грабля: две ST-Link одновременно}
+
+\begin{warnbox}
+\textbf{Мы наступили на эту граблю.} У нас была
+\emph{вторая} ST-Link (для Blue Pill) подключена
+\emph{одновременно} с Nucleo. Команды \texttt{st-info},
+\texttt{st-flash}, \texttt{openocd} \emph{видели} только
+\emph{одну} из них~--- не всегда \emph{ту}, которую
+мы хотели. В результате мы получали \emph{странные}
+данные из Flash.
+
+\textbf{Решение:} отключите \emph{все} ST-Link, кроме
+той, с которой работаете. Если вам \emph{нужны} обе~---
+используйте флаг \texttt{-s <serial>} в \texttt{st-util}
+или \texttt{st-flash}, чтобы указать \emph{конкретную}.
+\end{warnbox}
+
+\section{Nucleo и Mass Storage}
+\label{sec:flashing-massstorage}
+
+\textbf{Nucleo-F401RE}~--- это не только ST-Link и STM32.
+Это ещё и \emph{виртуальная флешка}, которую видит
+компьютер.
+
+\subsection{Что такое Mass Storage}
+
+Подключите Nucleo к компьютеру и откройте файловый
+менеджер~--- вы увидите \emph{новый} диск под названием
+\texttt{NUCLEO}. На нём будут \emph{файлы}:
+
+\begin{itemize}
+    \item \texttt{mbd.htm}~--- страница с информацией
+          о плате.
+    \item \texttt{System Volume Information}~--- служебный
+          каталог Windows.
+    \item \texttt{fseventsd}~--- служебный каталог macOS.
+    \item \texttt{.Trashes}~--- корзина macOS.
+    \item \texttt{.metadata\_never\_index}~--- маркер для
+          Spotlight (macOS).
+\end{itemize}
+
+\begin{ideabox}
+\textbf{Зачем это нужно?} \emph{Виртуальная флешка}~---
+это <<drag-and-drop>> прошивка. Вы \emph{копируете}
+файл \texttt{.bin} на диск \texttt{NUCLEO}~--- и
+STM32 \emph{перепрошивается}. Никаких \emph{команд},
+никаких \emph{инструментов}. Но мы будем использовать
+\emph{командную строку}~--- для \emph{понимания}.
+\end{ideabox}
+
+\subsection{Грабля: \texttt{[Trash Info]} в Flash}
+
+\begin{warnbox}
+\textbf{Наш реальный случай.} Когда мы впервые
+прочитали Flash через \texttt{st-flash read}, мы
+увидели \emph{не} код ARM, а \emph{текст}:
+\texttt{[Trash Info]}. Дальше~--- данные \emph{из} \emph{корзины}
+macOS: \texttt{Path=System\%20Volume\%20Information},
+\texttt{DeletionDate=2015-01-09T20:35:41}.
+
+\emph{Что это было?} Заводская прошивка Nucleo
+\emph{была повреждена} \emph{до} того, как плата
+попала к нам. В неё \emph{случайно} попал файл из
+корзины. При старте STM32 читал \emph{мусор} как
+\emph{векторную таблицу}~--- и падал в \textbf{HardFault}.
+
+\textbf{Решение:} \texttt{st-flash erase}~--- стереть
+Flash полностью. После этого~--- прошить заново.
+\end{warnbox}
+
+\subsection{Как отключить Mass Storage (если мешает)}
+
+Иногда \emph{виртуальная флешка} мешает работе~---
+\textbf{GDB} \emph{путается} между интерфейсами.
+Отключить её можно так:
+
+\begin{enumerate}
+    \item Отключите Nucleo от USB.
+    \item Зажмите кнопку \textbf{USER} (синяя).
+    \item Подключите USB (не отпуская USER).
+    \item Подождите 2 секунды.
+    \item Отпустите USER.
+\end{enumerate}
+
+\begin{notebox}
+\textbf{Это} \emph{не всегда нужно}. Но если вы
+видите \emph{странное} поведение~--- попробуйте.
+\end{notebox}
+
+\section{OpenOCD: альтернатива st-util}
+\label{sec:flashing-openocd}
+
+\textbf{OpenOCD}~--- это GDB-сервер. Он \emph{подключается}
+к ST-Link и \emph{транслирует} команды GDB в SWD-запросы.
+
+\subsection{Запуск}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg
+\end{minted}
+
+\textbf{Вывод} (наш реальный случай):
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+Open On-Chip Debugger 0.12.0
+Info : auto-selecting first available session transport "hla_swd".
+Info : Listening on port 6666 for tcl connections
+Info : Listening on port 4444 for telnet connections
+Info : clock speed 2000 kHz
+Info : STLINK V2J19M3 (API v2) VID:PID 0483:374B
+Info : Target voltage: 3.236292
+Info : [stm32f4x.cpu] Cortex-M4 r0p1 processor detected
+Info : [stm32f4x.cpu] target has 6 breakpoints, 4 watchpoints
+Info : starting gdb server for stm32f4x.cpu on 3333
+Info : Listening on port 3333 for gdb connections
+\end{minted}
+
+\textbf{Что это значит}:
+
+\begin{itemize}
+    \item \texttt{Listening on port 3333}~--- сервер
+          GDB работает на порту \textbf{3333}.
+    \item \texttt{STLINK V2J19M3}~--- ST-Link \emph{найден},
+          прошивка V2.J19.M3.
+    \item \texttt{Target voltage: 3.236292}~--- напряжение
+          на целевом STM32~--- \SI{3.24}{\volt}. Норма.
+    \item \texttt{Cortex-M4 r0p1 processor detected}~---
+          STM32F401 \emph{обнаружен}.
+    \item \texttt{6 breakpoints, 4 watchpoints}~---
+          \emph{аппаратные} точки останова.
+\end{itemize}
+
+\subsection{HardFault: что это значит}
+
+\textbf{После} подключения GDB к OpenOCD, при попытке
+\emph{остановить} процессор, мы видим:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+[stm32f4x.cpu] halted due to debug-request,
+current mode: Handler HardFault
+xPSR: 0x01000003 pc: 0x7461500a msp: 0x61725438
+\end{minted}
+
+\textbf{HardFault}~--- это \emph{аппаратное} исключение.
+Процессор \emph{встретил} что-то, что \emph{не может}
+обработать: \emph{невалидную} инструкцию, \emph{обращение}
+к \emph{несуществующей} памяти, \emph{деление} на ноль.
+
+\textbf{В нашем случае} причина~--- Flash содержала
+\emph{мусор}. Процессор \emph{читал} его как
+\emph{инструкции} и \emph{падал} в HardFault.
+
+\begin{keybox}
+\textbf{HardFault~--- это симптом, а не причина.}
+Если видите HardFault~--- ищите, \emph{почему} он
+возник. В нашем случае~--- потому что Flash была
+\emph{неправильной}. Решение~--- \texttt{st-flash erase}.
+\end{keybox}
+
+\subsection{PC и SP: почему мусор}
+
+\begin{itemize}
+    \item \texttt{pc: 0x7461500a}~--- это \emph{ASCII-код}:
+          \texttt{0a 50 61 74} = \texttt{\textbackslash nPat}.
+          То есть PC указывает на \emph{текст} в Flash.
+    \item \texttt{msp: 0x61725438}~--- тоже \emph{ASCII}:
+          \texttt{38 54 72 61} = \texttt{8Tra}.
+    \item \texttt{xPSR: 0x01000003}~--- статус. Бит 3
+          (\texttt{0x8})~--- \emph{прерывание}. То есть
+          процессор \emph{сейчас} в обработчике HardFault.
+\end{itemize}
+
+\begin{ideabox}
+\textbf{Как понять, что PC~--- это <<мусор>>?} Нормальный
+PC для STM32F401~--- в диапазоне \texttt{0x08000000}–\texttt{0x0807FFFF}
+(Flash) или \texttt{0x20000000}–\texttt{0x20017FFF} (SRAM).
+Если PC \emph{вне} этих диапазонов~--- что-то не так.
+\end{ideabox}
+
+\section{Стирание Flash: \texttt{st-flash erase}}
+\label{sec:flashing-erase}
+
+\textbf{Прежде чем} писать что-то \emph{своё} в Flash~---
+нужно \emph{стереть} то, что там \emph{лежит}. Даже если
+кажется, что Flash <<пустая>>~--- там могут быть
+\emph{остатки} старой прошивки.
+
+\subsection{Зачем стирать}
+
+\textbf{Три} причины:
+
+\begin{enumerate}
+    \item \textbf{Мусор.} Flash может содержать \emph{не то},
+          что вы ожидаете~--- как в нашем случае
+          с \texttt{[Trash Info]}.
+    \item \textbf{Защита от случайного запуска.} После
+          стирания Flash \emph{точно} пустая~---
+          процессор \emph{не} выполнит случайный код.
+    \item \textbf{Чистое состояние.} Мы \emph{знаем},
+          что там \emph{все} \texttt{0xFF}~--- и
+          можем \emph{проверить} результат записи.
+\end{enumerate}
+
+\subsection{Команда}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+st-flash erase
+\end{minted}
+
+\textbf{Вывод}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+st-flash 1.8.0
+2026-10-15T07:50:38 INFO common.c: STM32F401xD_xE: 96 KiB SRAM, 512 KiB flash in at least 16 KiB pages.
+Mass erasing..........
+Mass erase completed successfully.
+\end{minted}
+
+\begin{keybox}
+\textbf{Mass erase completed successfully}~--- это
+<<всё стёрто>>. Теперь Flash содержит \emph{только}
+байты \texttt{0xFF}.
+\end{keybox}
+
+\subsection{Проверка}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+st-flash read /tmp/nucleo-erased.bin 0x08000000 256
+hexdump -C /tmp/nucleo-erased.bin | head -20
+\end{minted}
+
+\textbf{Вывод}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+00000000  ff ff ff ff ff ff ff ff  ff ff ff ff ff ff ff ff  |................|
+*
+00000100
+\end{minted}
+
+\begin{ideabox}
+\textbf{Почему \texttt{0xFF}, а не \texttt{0x00}?} Потому
+что \emph{стёртая} Flash NOR-типа \emph{всегда} содержит
+\texttt{0xFF}. Запись~--- это <<перевод единиц в нули>>.
+Стереть~--- значит <<вернуть все единицы>>. Это
+\emph{аппаратная} особенность.
+\end{ideabox}
+
+\section{Запись и чтение: \texttt{st-flash write/read}}
+\label{sec:flashing-write}
+
+\textbf{Прежде чем} писать \emph{настоящую} программу~---
+проверим, что \emph{запись/чтение} вообще \emph{работают}.
+
+\subsection{Создаём тестовый файл}
+
+Запишем \emph{восемь} байт:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+echo -e '\x00\x20\x00\x20\x00\x00\x00\x00' > /tmp/test.bin
+\end{minted}
+
+\begin{itemize}
+    \item \texttt{00 20 00 20}~--- это \texttt{0x20002000}
+          (в little-endian)~--- \emph{валидный} адрес в SRAM.
+    \item \texttt{00 00 00 00}~--- это \texttt{0x00000000}.
+\end{itemize}
+
+\textbf{Почему именно так?} Потому что \emph{первые}
+8 байт Flash~--- это \emph{векторная таблица}:
+первые 4 байта~--- начальный \textbf{SP}, следующие
+4~--- адрес \textbf{Reset Handler}. Мы <<эмулируем>>
+векторную таблицу.
+
+\subsection{Запись}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+st-flash write /tmp/test.bin 0x08000000
+\end{minted}
+
+\textbf{Вывод}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+st-flash 1.8.0
+2026-10-15T23:05:47 INFO common.c: STM32F401xD_xE: 96 KiB SRAM, 512 KiB flash in at least 16 KiB pages.
+file /tmp/test.bin md5 checksum: 64dafa57f4feea2243946d37802a7230, stlink checksum: 0x0000004a
+2026-10-15T23:05:47 INFO common_flash.c: Attempting to write 9 (0x9) bytes to stm32 address: 134217728 (0x8000000)
+2026-10-15T23:05:47 WARN common_flash.c: unaligned len 0x9 -- padding with zero
+EraseFlash - Sector:0x0 Size:0x4000 -> Flash page at 0x8000000 erased (size: 0x4000)
+2026-10-15T23:05:47 INFO flash_loader.c: Starting Flash write for F2/F4/F7/L4
+2026-10-15T23:05:47 INFO flash_loader.c: Successfully loaded flash loader in sram
+2026-10-15T23:05:47 INFO flash_loader.c: Clear DFSR
+2026-10-15T23:05:47 INFO flash_loader.c: Clear CFSR
+2026-10-15T23:05:47 INFO flash_loader.c: Clear HFSR
+2026-10-15T23:05:47 INFO flash_loader.c: enabling 32-bit flash writes
+2026-10-15T23:05:47 INFO common_flash.c: Starting verification of write complete
+2026-10-15T23:05:47 INFO common_flash.c: Flash written and verified! jolly good!
+\end{minted}
+
+\subsection{Разбор вывода}
+
+\begin{itemize}
+    \item \texttt{md5 checksum: ...}~--- контрольная сумма
+          файла. Если \emph{не} совпадёт с \texttt{stlink
+          checksum}~--- \textbf{ошибка}.
+    \item \texttt{Attempting to write 9 (0x9) bytes}~---
+          \texttt{st-flash} прочитал \textbf{9} байт из
+          файла (а не 8!). Почему? Потому что \texttt{echo}
+          добавил \emph{новую строку} в конец.
+    \item \texttt{unaligned len 0x9 -- padding with zero}~---
+          длина \textbf{9} \emph{не кратна} 4. Flash
+          пишется \emph{словами} по 32 бита~---
+          \texttt{st-flash} \emph{дополнил} нулями до 12.
+    \item \texttt{EraseFlash - Sector:0x0}~--- перед
+          записью \texttt{st-flash} \emph{стёр} сектор 0
+          (\SI{16}{\kilo\byte}).
+    \item \texttt{Successfully loaded flash loader in sram}~---
+          \texttt{st-flash} загрузил \emph{маленький
+          загрузчик} в SRAM STM32. Этот загрузчик умеет
+          \emph{писать} в Flash~--- само \emph{ядро} Cortex-M
+          так не умеет.
+    \item \texttt{Clear DFSR/CFSR/HFSR}~--- сброс регистров
+          ошибок (Fault Status Registers). Профилактика.
+    \item \texttt{enabling 32-bit flash writes}~--- включили
+          запись \emph{словами}, а не байтами. \emph{Быстрее}.
+    \item \texttt{Flash written and verified! jolly good!}~---
+          \textbf{успех!} Данные \emph{записаны} и
+          \emph{проверены}.
+\end{itemize}
+
+\begin{keybox}
+\textbf{<<jolly good!>>~--- это фишка stlink-tools.}
+Когда запись и верификация прошли успешно, утилита
+пишет это \emph{по-английски}. Если увидели~---
+всё \emph{точно} работает.
+\end{keybox}
+
+\subsection{Чтение обратно}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+st-flash read /tmp/test-read.bin 0x08000000 8
+hexdump -C /tmp/test-read.bin
+\end{minted}
+
+\textbf{Вывод}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+00000000  00 20 00 20 00 00 00 00                           |. . ....|
+00000008
+\end{minted}
+
+\textbf{Мы видим} \emph{ровно} те байты, которые записали.
+\textbf{Запись/чтение работают}.
+
+\begin{ideabox}
+\textbf{Зачем это упражнение?} Оно \emph{доказывает},
+что цепочка \texttt{компьютер → ST-Link → SWD → Flash}
+работает. Если бы оно \emph{не} сработало~---
+не было бы смысла писать \emph{настоящую} программу.
+\end{ideabox}
+
+\section{GDB: подключение и исследование}
+\label{sec:flashing-gdb}
+
+\textbf{GDB}~--- это отладчик. Через него мы \emph{видим},
+что происходит \emph{внутри} STM32.
+
+\subsection{Запуск OpenOCD}
+
+\textbf{Терминал 1}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg
+\end{minted}
+
+\textbf{Ждём}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+Info : starting gdb server for stm32f4x.cpu on 3333
+Info : Listening on port 3333 for gdb connections
+\end{minted}
+
+\begin{warnbox}
+\textbf{Порт 3333, а не 4242.} \texttt{st-util} слушает
+порт \textbf{4242}. \texttt{OpenOCD}~--- \textbf{3333}.
+Не перепутайте!
+\end{warnbox}
+
+\subsection{Запуск GDB}
+
+\textbf{Терминал 2}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+arm-none-eabi-gdb
+\end{minted}
+
+\textbf{Внутри GDB}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+(gdb) target extended-remote 127.0.0.1:3333
+\end{minted}
+
+\textbf{Вывод}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+Remote debugging using 127.0.0.1:3333
+warning: No executable has been specified and target does not support
+determining executable automatically.  Try using the "file" command.
+0x7461500a in ?? ()
+\end{minted}
+
+\begin{itemize}
+    \item \texttt{Remote debugging using ...}~--- подключились.
+    \item \texttt{warning: No executable ...}~--- это
+          \emph{не} ошибка. GDB просто \emph{не знает},
+          какая программа сейчас в STM32 (мы не указали
+          файл). Он \emph{всё равно} может читать память
+          и регистры.
+    \item \texttt{0x7461500a in ?? ()}~--- PC сейчас
+          \texttt{0x7461500a}. Это \emph{мусор}.
+\end{itemize}
+
+\subsection{\texttt{info registers}}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+(gdb) info registers
+\end{minted}
+
+\textbf{Вывод} (наш случай):
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+r0             0x0                 0
+r1             0x0                 0
+r2             0x0                 0
+r3             0x0                 0
+r4             0x0                 0
+r5             0x0                 0
+r6             0x0                 0
+r7             0x0                 0
+r8             0x0                 0
+r9             0x0                 0
+r10            0x0                 0
+r11            0x0                 0
+r12            0x0                 0
+sp             0x61725438          0x61725438
+lr             0xfffffff9          -7
+pc             0x7461500a          0x7461500a
+xPSR           0x1000003           16777219
+fpscr          0x0                 0
+msp            0x61725438          0x61725438
+psp            0x0                 0
+primask        0x0                 0
+basepri        0x0                 0
+faultmask      0x0                 0
+control        0x0                 0
+\end{minted}
+
+\subsection{Что здесь важно}
+
+\begin{itemize}
+    \item \texttt{r0}–\texttt{r12}~--- \emph{нули}.
+          Это нормально~--- после сброса регистры обнуляются.
+    \item \texttt{sp = 0x61725438}~--- <<стек-поинтер>>.
+          Но \texttt{0x61725438}~--- это \emph{не} адрес
+          в SRAM. Это \emph{мусор}.
+    \item \texttt{lr = 0xfffffff9}~--- <<link register>>.
+          Значение \texttt{-7}~--- тоже странно.
+    \item \texttt{pc = 0x7461500a}~--- <<program counter>>.
+          Мусор.
+    \item \texttt{xPSR = 0x1000003}~--- статус. Бит 0
+          (\texttt{0x1})~--- режим Thumb. Бит 1
+          (\texttt{0x2})~--- бит \texttt{2} (<<precise
+          fault>>).
+    \item \texttt{msp = 0x61725438}~--- <<main stack pointer>>.
+          Тоже мусор.
+\end{itemize}
+
+\begin{warnbox}
+\textbf{Почему всё так странно?} Потому что STM32
+\emph{сейчас} в HardFault~--- процессор пытается
+обработать \emph{ошибку}, но не может. Регистры содержат
+\emph{последние} значения, которые привели к ошибке.
+\end{warnbox}
+
+\subsection{Чтение Flash}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+(gdb) x/8z 0x08000000
+\end{minted}
+
+\textbf{Команда \texttt{x}}~--- <<examine>> (исследовать).
+Суффикс \texttt{/8z}~--- <<8 слов, шестнадцатерично>>.
+
+\textbf{До стирания} мы видели:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+0x8000000:	0x6172545b	0x49206873	0x5d6f666e	0x7461500a
+0x8000010:	0x79533d68	0x6d657473	0x56303225	0x6d756c6f
+\end{minted}
+
+\textbf{Это}~--- ASCII: \texttt{[Tra}, \texttt{sh I},
+\texttt{nfo]}, \texttt{\textbackslash nPat}, \texttt{h=Sy},
+\texttt{stem}, \texttt{\%20V}, \texttt{olum}.
+
+\begin{ideabox}
+\textbf{Как <<увидеть>> текст в hex?} Возьмите байты
+\emph{по отдельности} и посмотрите на ASCII-таблицу.
+Например, \texttt{0x7461500a} в little-endian~---
+это байты \texttt{0a 50 61 74}, то есть \texttt{\textbackslash n},
+\texttt{P}, \texttt{a}, \texttt{t}. Вместе~---
+\texttt{\textbackslash nPat}.
+\end{ideabox}
+
+\subsection{Чтение SRAM}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+(gdb) x/4z 0x20000000
+\end{minted}
+
+\textbf{Вывод} (наш случай):
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+0x20000000:	0x8d89d84c	0xe29749ef	0x248280bc	0x755be5e7
+\end{minted}
+
+\textbf{После сброса} SRAM должна содержать \emph{нули}
+или \emph{почти} нули. У нас~--- мусор. Это \emph{значит},
+что процессор \emph{работал} до сбоя.
+
+\section{Первая программа: мигание LED}
+\label{sec:flashing-blink}
+
+\textbf{Теперь} — самое интересное. Мы напишем
+\emph{первую} программу — мигание LED на Nucleo.
+
+\subsection{LED на Nucleo-F401RE}
+
+На Nucleo-F401RE есть \emph{три} LED:
+
+\begin{itemize}
+    \item \textbf{LD1} (зелёный, у USB)~--- \emph{питание}.
+          Управляется \emph{аппаратно}, не STM32.
+    \item \textbf{LD2} (зелёный, у кнопки)~--- \emph{пользовательский}.
+          Подключён к пину \textbf{PA5} STM32. \emph{Вот}
+          его мы и будем мигать.
+    \item \textbf{LD3} (красный, <<ST-Link>>)~--- \emph{ST-Link
+          активен}. Управляется \emph{ST-Link}, не STM32.
+\end{itemize}
+
+\begin{keybox}
+\textbf{LD2~--- единственный LED, управляемый STM32.}
+Он подключён к PA5. Если подать на PA5 высокий уровень~---
+LED горит. Если низкий~--- гаснет.
+\end{keybox}
+
+\begin{warnbox}
+\textbf{Грабля: многие думают, что LD3~--- пользовательский.}
+На Nucleo-F401RE \textbf{LD3}~--- это \emph{красный} LED
+ST-Link. Он \emph{не} управляется STM32. \textbf{LD2}~---
+\emph{зелёный}, подключён к PA5. \emph{Вот} его и мигаем.
+\end{warnbox}
+
+\subsection{Что нужно для прошивки}
+
+Минимальная программа на C для STM32 состоит из \emph{трёх}
+файлов:
+
+\begin{itemize}
+    \item \textbf{\texttt{linker.ld}}~--- <<карта памяти>>.
+          Говорит линкеру, \emph{где} разместить код
+          (\texttt{0x08000000}) и данные (\texttt{0x20000000}).
+    \item \textbf{\texttt{startup.c}}~--- векторная таблица
+          и обработчик сброса.
+    \item \textbf{\texttt{blink.c}}~--- сам код мигания.
+\end{itemize}
+
+\subsection{linker.ld}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
+    SRAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 96K
+}
+
+/* Верхушка стека — конец SRAM */
+_estack = ORIGIN(SRAM) + LENGTH(SRAM);
+
+SECTIONS
+{
+    .text :
+    {
+        KEEP(*(.vector_table))
+        *(.text*)
+        *(.rodata*)
+    } > FLASH
+
+    /* Адрес, откуда копировать .data */
+    _sidata = LOADADDR(.data);
+
+    .data :
+    {
+        _sdata = .;
+        *(.data*)
+        _edata = .;
+    } > SRAM AT > FLASH
+
+    .bss :
+    {
+        _sbss = .;
+        *(.bss*)
+        *(COMMON)
+        _ebss = .;
+    } > SRAM
+}
+\end{minted}
+\caption{\texttt{linker.ld}~--- карта памяти STM32F401}
+\label{lst:flashing-linker}
+\end{listing}
+
+\textbf{Что здесь важного}:
+
+\begin{itemize}
+    \item \texttt{ORIGIN = 0x08000000}~--- Flash начинается
+          \emph{здесь} (по документации STM32F4).
+    \item \texttt{ORIGIN = 0x20000000}~--- SRAM начинается
+          \emph{здесь}.
+    \item \texttt{\_estack}~--- верхушка стека (\texttt{0x20018000}).
+          Первое слово векторной таблицы.
+    \item \texttt{.vector\_table}~--- секция для \emph{векторной
+          таблицы}. Помечена \texttt{KEEP}, чтобы линкер
+          \emph{не} выбросил её.
+    \item \texttt{AT > FLASH}~--- \emph{данные} хранятся
+          в Flash, но \emph{копируются} в SRAM при старте.
+    \item \texttt{\_sidata}, \texttt{\_sdata}, \texttt{\_edata}~---
+          символы для \texttt{startup.c}.
+\end{itemize}
+
+\subsection{startup.c}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+#include <stdint.h>
+
+extern uint32_t _estack;
+extern uint32_t _sidata, _sdata, _edata;
+extern uint32_t _sbss, _ebss;
+extern int main(void);
+
+void Reset_Handler(void);
+void Default_Handler(void);
+
+__attribute__((section(".vector_table")))
+const uint32_t vector_table[] = {
+    (uint32_t)&_estack,          /* 0: Initial SP */
+    (uint32_t)Reset_Handler,     /* 1: Reset */
+    (uint32_t)Default_Handler,   /* 2: NMI */
+    (uint32_t)Default_Handler,   /* 3: HardFault */
+    (uint32_t)Default_Handler,   /* 4: MemManage */
+    (uint32_t)Default_Handler,   /* 5: BusFault */
+    (uint32_t)Default_Handler,   /* 6: UsageFault */
+    0, 0, 0, 0,                  /* 7-10: Reserved */
+    (uint32_t)Default_Handler,   /* 11: SVCall */
+    (uint32_t)Default_Handler,   /* 12: Debug Monitor */
+    0,                           /* 13: Reserved */
+    (uint32_t)Default_Handler,   /* 14: PendSV */
+    (uint32_t)Default_Handler,   /* 15: SysTick */
+};
+
+void Reset_Handler(void)
+{
+    /* Копируем .data из Flash в SRAM */
+    uint32_t *src = &_sidata;
+    uint32_t *dst = &_sdata;
+    while (dst < &_edata) *dst++ = *src++;
+
+    /* Обнуляем .bss */
+    dst = &_sbss;
+    while (dst < &_ebss) *dst++ = 0;
+
+    main();
+
+    while (1);
+}
+
+void Default_Handler(void)
+{
+    while (1);
+}
+\end{minted}
+\caption{\texttt{startup.c}~--- векторная таблица и обработчик сброса}
+\label{lst:flashing-startup}
+\end{listing}
+
+\textbf{Что здесь важного}:
+
+\begin{itemize}
+    \item \texttt{\#include <stdint.h>}~--- \textbf{обязательно}.
+          Без него \texttt{uint32\_t} не определён~---
+          компилятор выдаст \texttt{unknown type name 'uint32\_t'}.
+    \item \texttt{vector\_table}~--- это \emph{первое},
+          что читает STM32 после сброса. Первые 4 байта~---
+          \emph{SP}, следующие 4~--- \emph{Reset\_Handler}.
+    \item \texttt{Reset\_Handler}~--- копирует данные
+          \emph{из} Flash \emph{в} SRAM (\texttt{.data}),
+          обнуляет \texttt{.bss}, вызывает \texttt{main}.
+    \item \texttt{Default\_Handler}~--- \emph{заглушка}
+          для всех \emph{неиспользуемых} прерываний.
+\end{itemize}
+
+\begin{warnbox}
+\textbf{Грабля: \texttt{unknown type name 'uint32\_t'}.}
+Если забыть \texttt{\#include <stdint.h>}, компилятор
+выдаст \emph{десятки} ошибок. \texttt{uint32\_t}~---
+это \emph{не} встроенный тип, а \emph{тип} из
+стандартной библиотеки C.
+\end{warnbox}
+
+\subsection{blink.c}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+#include <stdint.h>
+
+/* Регистры STM32F401 */
+#define RCC_AHB1ENR  (*(volatile uint32_t *)0x40023830)
+#define GPIOA_MODER  (*(volatile uint32_t *)0x40020000)
+#define GPIOA_ODR    (*(volatile uint32_t *)0x40020014)
+
+static void delay(volatile uint32_t count)
+{
+    while (count--) __asm__ volatile ("nop");
+}
+
+int main(void)
+{
+    /* 1. Включаем тактирование GPIOA */
+    RCC_AHB1ENR |= (1u << 0);
+
+    /* 2. Настраиваем PA5 как выход */
+    GPIOA_MODER &= ~(3u << 10);  /* сбрасываем биты 10-11 */
+    GPIOA_MODER |=  (1u << 10);  /* 01 = output */
+
+    /* 3. Мигаем */
+    while (1) {
+        GPIOA_ODR ^= (1u << 5);  /* инвертируем PA5 */
+        delay(500000);
+    }
+}
+\end{minted}
+\caption{\texttt{blink.c}~--- мигание LED LD2 на Nucleo-F401RE}
+\label{lst:flashing-blink}
+\end{listing}
+
+\textbf{Что здесь важного}:
+
+\begin{itemize}
+    \item Регистры~--- это \emph{адреса памяти}. Читая
+          и записывая их, мы управляем периферией.
+    \item \texttt{RCC\_AHB1ENR}~--- включает тактирование
+          (<<часы>>) для порта GPIOA. \emph{Без этого}
+          GPIOA не работает.
+    \item \texttt{GPIOA\_MODER}~--- режим пина. Для PA5~---
+          \emph{выход}.
+    \item \texttt{GPIOA\_ODR}~--- состояние пина (0 или 1).
+          \texttt{\^{}=}~--- \emph{инвертировать}.
+\end{itemize}
+
+\subsection{Makefile}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{make}
+CC      = arm-none-eabi-gcc
+OBJCOPY = arm-none-eabi-objcopy
+SIZE    = arm-none-eabi-size
+CFLAGS  = -mcpu=cortex-m4 -mthumb -nostdlib -ffreestanding \
+          -fno-builtin -O2 -g3 -Wall -Wextra
+
+all: blink.bin
+
+blink.elf: blink.c startup.c linker.ld
+    $(CC) $(CFLAGS) -T linker.ld -o $@ blink.c startup.c
+    $(SIZE) $@
+
+blink.bin: blink.elf
+    $(OBJCOPY) -O binary $< $@
+
+flash: blink.bin
+    st-flash write blink.bin 0x08000000
+
+clean:
+    rm -f blink.elf blink.bin
+
+.PHONY: all flash clean
+\end{minted}
+\caption{\texttt{Makefile}~--- сборка и прошивка мигания LED}
+\label{lst:flashing-makefile}
+\end{listing}
+
+
+\begin{warnbox}
+\textbf{Табуляция в Makefile.} Команды \emph{обязаны}
+начинаться с \textbf{табуляции} (\texttt{\^{}I}), а не
+с \emph{пробелов}. Если вставить код из книги — табуляция
+может испортиться. Проверьте командой:
+\begin{minted}{bash}
+cat -A Makefile | grep '^I'
+\end{minted}
+\end{warnbox}
+
+\textbf{Сборка и прошивка}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+make clean
+make
+make flash
+\end{minted}
+
+\textbf{Результат} (наш реальный случай):
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+   text    data     bss     dec     hex filename
+    228       0       0     228      e4 blink.elf
+
+st-flash write blink.bin 0x08000000
+...
+Flash written and verified! jolly good!
+\end{minted}
+
+\textbf{LED LD2} \emph{мигает}. Первая программа работает.
+
+\begin{ideabox}
+\textbf{228 байт~--- это вся программа.} Без HAL,
+без библиотек, без IDE. Только \emph{наш} код
+и \emph{наше} понимание железа. \textbf{512 КБ}
+Flash у STM32F401~--- использовано \textbf{0.04\%}.
+Остальное~--- для осциллографа.
+\end{ideabox}
+
+\section{Уроки главы}
+\label{sec:flashing-lessons}
+
+\begin{enumerate}
+    \item \textbf{Пять инструментов:} ARM GCC, GDB,
+          stlink-tools, OpenOCD, make.
+    \item \textbf{\texttt{gdb-arm-none-eabi} удалён}
+          из Debian. Используйте \texttt{gdb-multiarch}.
+    \item \textbf{\texttt{st-info --probe}~--- первый шаг.}
+    \item \textbf{Две ST-Link~--- грабля.} Отключайте лишние.
+    \item \textbf{\texttt{[Trash Info]} в Flash~---
+          реальность.} \texttt{st-flash erase} лечит.
+    \item \textbf{HardFault~--- симптом.} Ищите причину.
+    \item \textbf{Минимальная программа:} linker.ld +
+          startup.c + blink.c + Makefile.
+    \item \textbf{Регистры~--- это адреса памяти.} Читая
+          и записывая их, управляем железом.
+    \item \textbf{LD2~--- пользовательский LED.} Не LD3!
+          LD3~--- это ST-Link.
+    \item \textbf{\texttt{\#include <stdint.h>} в startup.c~---
+          обязательно.} Иначе \texttt{uint32\_t} не определён.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:flashing-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли прошивки STM32}
+\label{tab:flashing-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & \texttt{gdb-arm-none-eabi} не найден & \texttt{gdb-multiarch} + симлинк \\
+2 & \texttt{st-info} видит не тот чип & Отключить лишние ST-Link \\
+3 & Flash содержит мусор & \texttt{st-flash erase} \\
+4 & \texttt{st-util} читает мусор & Использовать OpenOCD \\
+5 & HardFault после прошивки & Проверить векторную таблицу \\
+6 & \texttt{st-flash} ругается на unaligned & Нормально, padding нулями \\
+7 & LED не мигает & Проверить тактирование GPIOA \\
+8 & Программа <<зависает>> & Нет \texttt{while(1)} в конце \\
+9 & \texttt{unknown type name 'uint32\_t'} & \texttt{\#include <stdint.h>} \\
+10 & Мигает не тот LED & LD2, не LD3. LD3~--- ST-Link. \\
+11 & \texttt{make: *** missing separator} & Табуляция в Makefile \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:flashing-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Запишите \emph{десять} байт
+в Flash по адресу \texttt{0x08001000}. Прочитайте
+обратно. Совпадают ли байты?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Подключитесь GDB через OpenOCD.
+Выполните \texttt{x/16z 0x08000000}. Сколько слов
+занимает векторная таблица до \emph{нашего} Reset
+Handler?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Измените \texttt{delay()} в
+\texttt{blink.c} так, чтобы LED мигал \emph{быстрее}.
+Сколько времени занимает \emph{одна} итерация цикла?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Добавьте в \texttt{vector\_table}
+\emph{пустые} обработчики для всех прерываний STM32F401.
+Сколько их всего?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:flashing-check}
+
+\begin{enumerate}
+    \item Установите инструменты (см. раздел 2.2).
+    \item Подключите Nucleo по USB.
+    \item Проверьте: \texttt{st-info --probe}.
+    \item Сотрите Flash: \texttt{st-flash erase}.
+    \item Прочитайте: \texttt{st-flash read /tmp/x.bin 0x08000000 256}.
+    \item Соберите программу: \texttt{make}.
+    \item Прошейте: \texttt{make flash}.
+    \item Убедитесь, что LED LD2 мигает.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если LED мигает~--- вы прошли путь!} От \emph{нуля}
+до \emph{первой} работающей программы на STM32. Дальше~---
+интереснее: мы будем \emph{захватывать} сигналы, \emph{формировать}
+их, \emph{рисовать} на экране.
+\end{ideabox}

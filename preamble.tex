@@ -1,0 +1,163 @@
+% ═══════════════════════════════════════════════════════════════
+%  ОСНОВНОЙ КЛАСС И ГЕОМЕТРИЯ
+% ═══════════════════════════════════════════════════════════════
+\usepackage[
+    top=2.5cm,
+    bottom=2.5cm,
+    left=2.5cm,
+    right=2.5cm,
+    headheight=14pt
+]{geometry}
+
+% Интерлиньяж — чуть больше стандартного, для комфортного чтения
+\linespread{1.1}
+
+% ═══════════════════════════════════════════════════════════════
+%  ЯЗЫК И КОДИРОВКА
+% ═══════════════════════════════════════════════════════════════
+% ─── Язык (через polyglossia, не babel!) ───
+\usepackage{polyglossia}
+\setmainlanguage{russian}
+\setotherlanguage{english}
+
+% ═══════════════════════════════════════════════════════════════
+%  ШРИФТЫ
+% ═══════════════════════════════════════════════════════════════
+% ─── Шрифты (через fontspec) ───
+\usepackage{fontspec}
+
+% Основной — CMU Serif (Computer Modern Unicode, с кириллицей!)
+\setmainfont{CMU Serif}
+
+% Без засечек — CMU Sans Serif
+\setsansfont{CMU Sans Serif}
+
+% Моноширинный — DejaVu Sans Mono (у него гарантированно есть кириллица)
+\setmonofont{DejaVu Sans Mono}[Scale=0.85]
+
+% Русские переносы
+\usepackage{hyphenat}
+
+% Математика
+\usepackage{amsmath, amssymb, amsfonts}
+
+% ═══════════════════════════════════════════════════════════════
+%  ПОЛЕЗНЫЕ ПАКЕТЫ
+% ═══════════════════════════════════════════════════════════════
+
+% Многострочные комментарии
+\usepackage{comment}
+
+% Ссылки в PDF
+\usepackage[
+    colorlinks=true,
+    linkcolor=clrIdea,
+    citecolor=clrIdea,
+    urlcolor=clrIdea,
+    bookmarks=true,
+    bookmarksnumbered=true,
+    unicode=true,                        % ← ДОБАВИТЬ
+    pdftitle={STM32, DMA и GTK4},
+    pdfauthor={Александр},
+]{hyperref}
+
+% Умные ссылки: \autoref{fig:...} → "рис. 5"
+\usepackage{cleveref}
+
+% Иконки
+\usepackage{fontawesome5}
+
+% Единицы измерения
+\usepackage{siunitx}
+\sisetup{
+    output-decimal-marker={,},
+    group-separator={\,},
+    group-minimum-digits=4,
+}
+
+% Улучшенная типографика
+\usepackage{microtype}
+
+% Листинги программ
+\usepackage{minted}
+% Настройка по умолчанию для всех листингов
+\setminted{
+    fontsize=\small,
+    linenos=true,
+    numbersep=8pt,
+    frame=single,
+    framesep=2mm,
+    breaklines=true,
+    tabsize=4,
+    bgcolor=clrCodeBg,
+    rulecolor=clrCodeFrame,
+}
+
+% ─── Список листингов: русский язык и формат ────────────────
+\renewcommand{\listingscaption}{Листинг}
+\renewcommand{\listoflistingscaption}{Список листингов}
+
+
+% Красивая подсветка под C
+% или 'friendly', 'tango', 'xcode'
+\usemintedstyle{default}
+
+% Заметки на полях
+\usepackage{marginnote}
+
+% Зачёркнутый текст
+\usepackage{ulem}
+
+% Многострочные комментарии. Дублирует comment
+%\usepackage{verbatim}
+
+% Условная компиляция (черновик / финал)
+\usepackage{ifdraft}
+
+% Скруглённые углы у includegraphics
+\usepackage[export]{adjustbox}
+
+\usepackage{epigraph}
+%\usepackage{imakeidx}
+%\makeindex[title=Предметный указатель, intoc=true]
+
+\usepackage{tocloft}
+
+\usepackage{xcolor}
+
+% ─── TikZ и библиотеки ───────────────────────────────────────
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes, shapes.geometric,
+                calc, fit, backgrounds, decorations.pathreplacing,
+                decorations.markings, shadows, fadings, patterns,
+                matrix, chains}
+
+\usepackage{needspace}
+
+% ─── Типографика: растягивание строк ────────────────────────
+% LaTeX разрешает растянуть пробелы 
+% на 3em, чтобы избежать Overfull
+\setlength{\emergencystretch}{3em}
+% разрешает более свободные пробелы (по умолчанию 200)
+\tolerance=1000
+% убирает предупреждения Underfull \hbox
+\hbadness=10000
+% убирает предупреждения Underfull \vbox
+\vbadness=10000
+
+\usepackage{siunitx}
+\sisetup{
+    output-decimal-marker={,},
+    group-separator={\,},
+    group-minimum-digits=4,
+}
+
+% Регистрируем единицы, которых нет в siunitx по умолчанию
+\DeclareSIUnit{\sample}{Sa}      % семпл
+\DeclareSIUnit{\bit}{bit}        % бит
+\DeclareSIUnit{\bitps}{bit/s}    % бит в секунду
+\DeclareSIUnit{\baud}{Bd}        % бод
+\DeclareSIUnit{\sps}{sps}        % samples per second (альтернатива)
+
+
+

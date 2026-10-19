@@ -1,0 +1,4 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+u8 wave; u32 freq\PYGZus{}mHz; u16 ampl\PYGZus{}mVpp;
+i16 offset\PYGZus{}mV; u16 duty\PYGZus{}permille;
+\end{MintedVerbatim}

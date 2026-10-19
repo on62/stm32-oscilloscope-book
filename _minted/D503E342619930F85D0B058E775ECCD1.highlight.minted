@@ -1,0 +1,8 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+   text    data     bss     dec     hex filename
+    228       0       0     228      e4 blink.elf
+
+st\PYGZhy{}flash write blink.bin 0x08000000
+...
+Flash written and verified! jolly good!
+\end{MintedVerbatim}

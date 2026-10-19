@@ -1,0 +1,258 @@
+% ═══════════════════════════════════════════════════════════════
+%  ЦВЕТОВАЯ СХЕМА
+% ═══════════════════════════════════════════════════════════════
+
+
+% ─── Семантические цвета ──────────────────────────────────
+\definecolor{clrText}{HTML}{1A1A1A}        % основной текст
+\definecolor{clrCodeBg}{HTML}{F5F5F5}      % фон кода
+\definecolor{clrCodeFrame}{HTML}{CCCCCC}   % рамка кода
+\definecolor{clrKeyword}{HTML}{0055AA}     % ключевые слова
+\definecolor{clrComment}{HTML}{228855}     % комментарии
+\definecolor{clrString}{HTML}{AA2222}      % строки
+
+\definecolor{clrIdea}{HTML}{2E75B6}        % идея (синий)
+\definecolor{clrWarn}{HTML}{C0392B}        % внимание (красный)
+\definecolor{clrKey}{HTML}{27AE60}         % ключевой момент (зелёный)
+\definecolor{clrNote}{HTML}{8E44AD}        % заметка (фиолетовый)
+
+\definecolor{clrUIData}{HTML}{2980B9}      % UI (синий)
+\definecolor{clrLogicData}{HTML}{27AE60}   % логика (зелёный)
+\definecolor{clrHWData}{HTML}{E67E22}      % железо (оранжевый)
+\definecolor{clrStateData}{HTML}{8E44AD}   % состояние (фиолетовый)
+
+\definecolor{clrFlowData}{HTML}{C0392B}    % поток данных (красный)
+\definecolor{clrFlowCmd}{HTML}{2980B9}     % поток команд (синий)
+\definecolor{clrDep}{HTML}{7F8C8D}         % зависимости (серый)
+
+% Применяем основной цвет текста
+\color{clrText}
+
+% ═══════════════════════════════════════════════════════════════
+%  ЗАГОЛОВКИ
+% ═══════════════════════════════════════════════════════════════
+\usepackage{titlesec}
+
+% Глава
+\titleformat{\chapter}[display]
+    {\normalfont\huge\bfseries\color{clrIdea}}
+    {\filleft\Large\MakeUppercase{\chaptertitlename}~\thechapter}
+    {1ex}
+    {\titlerule\vspace{1ex}\filright}
+    [\vspace{1ex}\titlerule]
+
+\titlespacing*{\chapter}{0pt}{-20pt}{30pt}
+
+% Раздел
+\titleformat{\section}
+    {\normalfont\Large\bfseries\color{clrIdea}}
+    {\thesection}{1em}{}
+
+\titleformat{\subsection}
+    {\normalfont\large\bfseries\color{clrText}}
+    {\thesubsection}{1em}{}
+
+\titleformat{\subsubsection}
+    {\normalfont\normalsize\bfseries\color{clrText}}
+    {\thesubsubsection}{1em}{}
+    
+
+% ─── Общие стили узлов (для переиспользования) ────────────
+\tikzset{
+    % Базовый модуль
+    module/.style={
+        draw, rounded corners=1.5mm, thick,
+        minimum width=2.5cm, minimum height=0.9cm,
+        align=center, font=\footnotesize\ttfamily,
+        fill=white,
+        drop shadow={opacity=0.15, shadow xshift=0.5mm, shadow yshift=-0.5mm},
+    },
+    % Модули по слоям
+    modUI/.style={module, fill=clrUIData!20},
+    modLogic/.style={module, fill=clrLogicData!20},
+    modHW/.style={module, fill=clrHWData!25},
+    modState/.style={module, fill=clrStateData!20},
+    modUtil/.style={module, fill=gray!15},
+    modEntry/.style={module, fill=clrWarn!20},
+    % Внешние зависимости
+    ext/.style={
+        draw, dashed, rounded corners=1.5mm,
+        minimum width=2cm, minimum height=0.8cm,
+        align=center, font=\footnotesize\ttfamily,
+        fill=clrUIData!5,
+    },
+    % Стрелки
+    dep/.style={-{Latex[length=2mm]}, thick, color=clrDep},
+    extdep/.style={dep, dashed, color=clrUIData!60},
+    flowData/.style={-{Latex[length=3mm]}, very thick, color=clrFlowData},
+    flowCmd/.style={-{Latex[length=3mm]}, very thick, color=clrFlowCmd, dashed},
+    % Метки
+    label/.style={font=\footnotesize, midway, fill=white, inner sep=1pt},
+}
+
+% ═══════════════════════════════════════════════════════════════
+%  СТИЛИ ДЛЯ ДИАГРАММ ПОСЛЕДОВАТЕЛЬНОСТИ (UML sequence)
+% ═══════════════════════════════════════════════════════════════
+\tikzset{
+    % ─── Участник (актор) ────────────────────────────────
+    seqactor/.style={
+        draw, rounded corners=1.5mm, thick,
+        minimum width=2.4cm, minimum height=0.7cm,
+        align=center, font=\footnotesize\ttfamily,
+        fill=white,
+    },
+    seqactoruser/.style={seqactor, fill=clrWarn!20},
+    seqactorkernel/.style={seqactor, fill=clrUIData!20},
+    seqactorgio/.style={seqactor, fill=clrStateData!20},
+    seqactorsp/.style={seqactor, fill=clrHWData!25},
+    seqactorcb/.style={seqactor, fill=clrLogicData!25},
+    % ─── Линия жизни ────────────────────────────────────
+    lifeline/.style={
+        thick, dashed, color=gray!60,
+    },
+    % ─── Сообщение (стрелка) ─────────────────────────────
+    msg/.style={
+        -{Latex[length=2.5mm]}, thick, color=black!80,
+    },
+    msguser/.style={msg, color=clrWarn!80!black},
+    msgkernel/.style={msg, color=clrUIData!80!black},
+    msggio/.style={msg, color=clrStateData!80!black},
+    msgsp/.style={msg, color=clrHWData!80!black},
+    msgcb/.style={msg, color=clrLogicData!80!black},
+    % ─── Возврат (пунктир) ───────────────────────────────
+    ret/.style={
+        -{Latex[length=2mm]}, thick, dashed, color=gray!70,
+    },
+    % ─── Метка сообщения ────────────────────────────────
+    msglabel/.style={
+        font=\scriptsize\ttfamily,
+        fill=white, inner sep=1pt,
+        above,
+    },
+    msglabelbelow/.style={
+        font=\scriptsize\ttfamily,
+        fill=white, inner sep=1pt,
+        below,
+    },
+    % ─── Блок активации (прямоугольник на линии) ────────
+    activation/.style={
+        fill=white, draw, thick, minimum width=0.25cm,
+    },
+}
+
+% ═══════════════════════════════════════════════════════════════
+%  ВРЕЗКИ
+% ═══════════════════════════════════════════════════════════════
+\usepackage[most]{tcolorbox}
+\tcbuselibrary{skins, breakable}
+
+% ─── Идея ─────────────────────────────────────────────────
+\newtcolorbox{ideabox}[1][]{
+    enhanced,
+    colback=clrIdea!5,
+    colframe=clrIdea,
+    colbacktitle=clrIdea,
+    coltitle=white,
+    fonttitle=\bfseries,
+    title=\faLightbulb~Идея,
+    boxrule=0.5pt,
+    arc=2mm,
+    left=2mm, right=2mm, top=2mm, bottom=2mm,
+    breakable,
+    #1
+}
+
+% ─── Внимание ─────────────────────────────────────────────
+\newtcolorbox{warnbox}[1][]{
+    enhanced,
+    colback=clrWarn!5,
+    colframe=clrWarn,
+    colbacktitle=clrWarn,
+    coltitle=white,
+    fonttitle=\bfseries,
+    title=\faExclamationTriangle~Внимание,
+    boxrule=0.5pt,
+    arc=2mm,
+    left=2mm, right=2mm, top=2mm, bottom=2mm,
+    breakable,
+    #1
+}
+
+% ─── Ключевой момент ──────────────────────────────────────
+\newtcolorbox{keybox}[1][]{
+    enhanced,
+    colback=clrKey!5,
+    colframe=clrKey,
+    colbacktitle=clrKey,
+    coltitle=white,
+    fonttitle=\bfseries,
+    title=\faKey~Ключевой момент,
+    boxrule=0.5pt,
+    arc=2mm,
+    left=2mm, right=2mm, top=2mm, bottom=2mm,
+    breakable,
+    #1
+}
+
+% ─── Заметка ──────────────────────────────────────────────
+\newtcolorbox{notebox}[1][]{
+    enhanced,
+    colback=clrNote!5,
+    colframe=clrNote,
+    colbacktitle=clrNote,
+    coltitle=white,
+    fonttitle=\bfseries,
+    title=\faInfoCircle~Заметка,
+    boxrule=0.5pt,
+    arc=2mm,
+    left=2mm, right=2mm, top=2mm, bottom=2mm,
+    breakable,
+    #1
+}
+
+% ─── Упражнение ───────────────────────────────────────────
+\newtcolorbox{exercisebox}[1][]{
+    enhanced,
+    colback=clrKey!3,
+    colframe=clrKey!70!black,
+    colbacktitle=clrKey!70!black,
+    coltitle=white,
+    fonttitle=\bfseries,
+    title=\faPen~Упражнение,
+    boxrule=0.5pt,
+    arc=2mm,
+    left=2mm, right=2mm, top=2mm, bottom=2mm,
+    breakable,
+    #1
+}
+
+% ═══════════════════════════════════════════════════════════════
+%  ТАБЛИЦЫ
+% ═══════════════════════════════════════════════════════════════
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{colortbl}
+
+% ─── Цветной заголовок таблицы ────────────────────────────
+\newcommand{\tablehead}[1]{\textcolor{white}{\textbf{#1}}}
+
+% ─── Стиль «грабли» ───────────────────────────────────────
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\newcolumntype{C}{>{\centering\arraybackslash}X}
+\newcolumntype{R}{>{\raggedleft\arraybackslash}X}
+
+% ─── Шапка таблицы с фоном ────────────────────────────────
+\newcommand{\headrow}[1]{%
+    \rowcolor{clrIdea!80}%
+    \tablehead{#1}%
+}
+
+%  Эти стили дают нам:
+%- 5 цветных акторов — каждый со своим цветом.
+%- Линии жизни — серые пунктирные.
+%- Сообщения — сплошные стрелки, цветные по отправителю.
+%- Возвраты — серые пунктирные стрелки.
+%- Метки — моноширинные, с белым фоном.

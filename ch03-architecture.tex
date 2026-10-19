@@ -1,0 +1,727 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch03-architecture.tex
+%  Архитектура проекта: три мира, потоки данных, модули
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Архитектура проекта}
+\label{ch:architecture}
+
+\epigraph{<<Хорошая архитектура~--- это когда каждый модуль
+можно объяснить одним предложением>>.}{}
+
+\section{Введение}
+\label{sec:arch-intro}
+
+В \texttt{ch01} мы увидели \emph{общую} картину: что такое
+осциллограф, что такое генератор, зачем нужны \emph{два}
+STM32. В \texttt{ch02}~--- \emph{прошили} первую программу
+и убедились, что \emph{инструменты} работают.
+
+Теперь~--- \textbf{архитектура}. Прежде чем писать
+\emph{код}~--- нужно понять, \emph{как} его писать.
+Не <<в одном файле>>, не <<как получится>>, а
+\textbf{осознанно}.
+
+\begin{ideabox}
+\textbf{Архитектура~--- это не <<схема>>, а \emph{решение}.}
+Решение о том, \emph{где} провести границы между модулями.
+Если границы проведены \emph{правильно}~--- код \emph{легко}
+читать, \emph{легко} тестировать, \emph{легко} развивать.
+Если \emph{неправильно}~--- всё превращается в кашу.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Из каких \emph{трёх миров} состоит проект.
+    \item Как данные \emph{текут} от осциллографа к графику.
+    \item Почему \texttt{AppData}~--- \emph{центральный} хаб состояния.
+    \item Как \emph{разбить} <<монолитный>> \texttt{main.c}
+          на \emph{модули}.
+    \item Как \emph{работает} поток чтения осциллографа.
+    \item Почему \emph{многопоточность}~--- это \emph{сложно},
+          но \emph{необходимо}.
+\end{itemize}
+
+\section{Три мира}
+\label{sec:arch-three-worlds}
+
+Проект состоит из \textbf{трёх} независимых \emph{миров},
+которые \emph{общаются} друг с другом по \textbf{протоколу}.
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    world/.style={
+        draw, rounded corners=3mm, thick,
+        minimum width=4cm, minimum height=3cm,
+        align=center, font=\small
+    },
+    osc/.style={world, fill=clrHWData!15},
+    gen/.style={world, fill=clrLogicData!15},
+    pc/.style={world, fill=clrUIData!15},
+    arr/.style={-{Latex[length=4mm]}, very thick, color=clrFlowCmd},
+    arrdata/.style={-{Latex[length=4mm]}, very thick, color=clrFlowData},
+    label/.style={
+        font=\small,
+        fill=white,
+        inner sep=3pt,
+        above,
+        midway,
+        yshift=8pt
+    },
+    labelbelow/.style={
+        font=\small,
+        fill=white,
+        inner sep=3pt,
+        below,
+        midway,
+        yshift=-8pt
+    }
+]
+
+% Осциллограф
+\node[osc] (osc) at (-5, 0) {\textbf{Осциллограф}\\[2pt]
+    NUCLEO-F401RE\\
+    ADC + DMA\\
+    USB CDC};
+
+% ПК
+\node[pc] (pc) at (0, 0) {\textbf{ПК}\\[2pt]
+    GTK4 + Cairo\\
+    Потоки + Мьютексы\\
+    Протокол};
+
+% Генератор
+\node[gen] (gen) at (5, 0) {\textbf{Генератор}\\[2pt]
+    STM32F103\\
+    DAC + PWM\\
+    USB CDC};
+
+% Стрелки: осциллограф → ПК
+\draw[arrdata, bend left=20] (osc.north east) to
+    node[label] {данные (OSC\_DATA)} (pc.north west);
+
+% Стрелки: ПК → осциллограф
+\draw[arr, bend left=20] (pc.south west) to
+    node[labelbelow] {команды (stream\_on)} (osc.south east);
+
+% Стрелки: ПК → генератор
+\draw[arr, bend right=20] (pc.north east) to
+    node[label] {команды (set\_wave)} (gen.north west);
+
+% Стрелки: генератор → ПК
+\draw[arrdata, bend right=20] (gen.south west) to
+    node[labelbelow] {ответы (get\_status)} (pc.south east);
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Три мира проекта. \textcolor{clrFlowData}{Данные}
+текут от осциллографа к ПК, \textcolor{clrFlowCmd}{команды}~---
+от ПК к генератору и обратно.}
+\label{fig:arch-three-worlds}
+\end{figure}
+
+\subsection{Мир 1: осциллограф}
+
+\textbf{Осциллограф}~--- на плате \textbf{NUCLEO-F401RE}.
+Его \emph{задача}:
+
+\begin{itemize}
+    \item \textbf{Захватывать} сигнал через \textbf{ADC}.
+    \item \textbf{Перекладывать} данные в память через
+          \textbf{DMA} (без участия CPU).
+    \item \textbf{Формировать} кадры \texttt{OSC\_DATA}
+          с метаданными.
+    \item \textbf{Передавать} кадры на ПК через
+          \textbf{USB CDC}.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Осциллограф~--- это <<слушатель>>.} Он \emph{не}
+принимает решений, \emph{не} рисует графики. Он \emph{только}
+захватывает сигнал и \emph{отдаёт} его ПК. Вся \emph{логика
+отображения}~--- на ПК.
+\end{keybox}
+
+\subsection{Мир 2: генератор}
+
+\textbf{Генератор}~--- на плате \textbf{STM32F103C8T6}
+(Blue Pill). Его \emph{задача}:
+
+\begin{itemize}
+    \item \textbf{Принимать} команды от ПК через
+          \textbf{USB CDC}.
+    \item \textbf{Формировать} сигнал через \textbf{DAC}
+          или \textbf{PWM}.
+    \item \textbf{Воспроизводить} таблицу формы через
+          \textbf{DMA circular}.
+    \item \textbf{Отвечать} на запросы статуса.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Генератор~--- это <<голос>>.} Он \emph{принимает}
+команды и \emph{формирует} сигнал. \emph{Не} хранит
+историю, \emph{не} рисует графики. Только \emph{выдаёт}
+сигнал.
+\end{keybox}
+
+\subsection{Мир 3: ПК}
+
+\textbf{ПК}~--- на \textbf{GTK4}. Его \emph{задача}:
+
+\begin{itemize}
+    \item \textbf{Принимать} данные от осциллографа
+          и \emph{рисовать} их.
+    \item \textbf{Отправлять} команды генератору.
+    \item \textbf{Управлять} потоком данных (start/stop).
+    \item \textbf{Отображать} интерфейс: форму, частоту,
+          амплитуду.
+\end{itemize}
+
+\begin{keybox}
+\textbf{ПК~--- это <<мозг>>.} Он \emph{принимает} решения:
+что рисовать, как масштабировать, когда остановить поток.
+Вся \emph{логика управления}~--- на ПК.
+\end{keybox}
+
+\section{Потоки данных}
+\label{sec:arch-data-flow}
+
+Данные в проекте текут в \textbf{двух направлениях}:
+\emph{команды}~--- от ПК к устройствам, \emph{данные}~---
+от устройств к ПК.
+
+\subsection{Поток команд: сверху вниз}
+
+Пользователь \emph{меняет} форму сигнала в интерфейсе:
+
+\begin{enumerate}
+    \item \textbf{GTK4} ловит \emph{сигнал} и вызывает
+          \texttt{on\_apply\_generator()}.
+    \item \texttt{on\_apply\_generator()} \emph{собирает}
+          команды (set\_wave, set\_freq, set\_ampl, ...).
+    \item \texttt{send\_cmd()} \emph{формирует} кадры
+          и \emph{отправляет} их в порт генератора.
+    \item \textbf{STM32F103} \emph{принимает} кадры
+          и \emph{применяет} настройки.
+    \item \textbf{DAC} \emph{начинает} формировать
+          новый сигнал.
+\end{enumerate}
+
+\subsection{Поток данных: снизу вверх}
+
+Arduino (осциллограф) \emph{захватывает} сигнал:
+
+\begin{enumerate}
+    \item \textbf{ADC} \emph{семплирует} сигнал.
+    \item \textbf{DMA} \emph{перекладывает} семплы в SRAM.
+    \item \textbf{Прошивка} \emph{формирует} кадр
+          \texttt{OSC\_DATA}.
+    \item \textbf{USB CDC} \emph{отправляет} кадр на ПК.
+    \item \texttt{osc\_reader\_thread()} \emph{принимает}
+          кадр в отдельном потоке.
+    \item \texttt{draw\_scope()} \emph{рисует} сигнал
+          на экране.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    box/.style={
+        draw, rounded corners=1.5mm, thick,
+        minimum width=2.4cm, minimum height=0.9cm,
+        align=center, font=\footnotesize\ttfamily,
+        fill=white
+    },
+    hw/.style={box, fill=clrHWData!25},
+    logic/.style={box, fill=clrLogicData!20},
+    ui/.style={box, fill=clrUIData!15},
+    arr/.style={-{Latex[length=3mm]}, very thick, color=clrFlowData},
+    node distance=1.2cm,
+label/.style={
+    font=\small,
+    fill=white,
+    inner sep=3pt,
+    above,
+    midway,
+    yshift=14pt
+}
+]
+
+% Поток данных (вверх)
+\node[hw] (adc) {ADC};
+\node[hw, right=of adc] (dma) {DMA};
+\node[hw, right=of dma] (frame) {Кадр};
+\node[hw, right=of frame] (usb) {USB CDC};
+\node[logic, right=of usb] (thread) {Поток};
+\node[ui, right=of thread] (draw) {Cairo};
+
+\draw[arr] (adc) -- (dma) node[label] {семплы};
+\draw[arr] (dma) -- (frame) node[label] {блок};
+\draw[arr] (frame) -- (usb) node[label] {OSC\_DATA};
+\draw[arr] (usb) -- (thread) node[label] {read()};
+\draw[arr] (thread) -- (draw) node[label] {данные};
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Поток данных от ADC до Cairo.}
+\label{fig:arch-data-path}
+\end{figure}
+
+\begin{keybox}
+\textbf{Данные~--- это <<кровь>> проекта.} Команды~--- это
+\emph{управление}, данные~--- это \emph{жизнь}. Если поток
+данных \emph{остановился}~--- осциллограф \emph{мёртв}.
+\end{keybox}
+
+\section{Модули ПК-приложения}
+\label{sec:arch-pc-modules}
+
+\textbf{Монолитный} \texttt{main.c} (как в прототипе)~---
+это \emph{неправильно}. Мы \emph{разобьём} его на \textbf{шесть}
+модулей.
+
+\begin{table}[htbp]
+\centering
+\caption{Модули ПК-приложения}
+\label{tab:arch-pc-modules}
+\small
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\textbf{Модуль} & \textbf{Ответственность} \\
+\midrule
+\texttt{protocol.c}    & Отправка/приём кадров, CRC16 \\
+\texttt{serial\_port.c} & Открытие порта, termios, USB CDC \\
+\texttt{osc\_reader.c}  & Поток чтения осциллографа \\
+\texttt{draw\_scope.c}  & Отрисовка осциллограммы (Cairo) \\
+\texttt{ui.c}           & GTK4-интерфейс, кнопки, поля \\
+\texttt{main.c}         & Точка входа, инициализация \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{protocol.c}
+
+\textbf{Что делает}: \emph{формирует} и \emph{парсит}
+кадры протокола.
+
+\begin{itemize}
+    \item \texttt{send\_cmd()}~--- \emph{отправляет}
+          кадр с командой.
+    \item \texttt{crc16\_ibm()}~--- \emph{считает} CRC16.
+    \item \texttt{parse\_frame()}~--- \emph{парсит}
+          входящий кадр.
+\end{itemize}
+
+\begin{notebox}
+\textbf{Протокол} \emph{подробно} разбираем в
+\texttt{ch04}. Здесь~--- только \emph{упоминание}.
+\end{notebox}
+
+\subsection{serial\_port.c}
+
+\textbf{Что делает}: \emph{открывает} порт и
+\emph{настраивает} \texttt{termios}.
+
+\begin{itemize}
+    \item \texttt{open\_port()}~--- \emph{открывает}
+          порт с \texttt{O\_NOCTTY}, \texttt{O\_NONBLOCK}.
+    \item \texttt{configure\_port()}~--- \emph{настраивает}
+          \texttt{termios}.
+    \item \texttt{close\_port()}~--- \emph{закрывает} порт.
+\end{itemize}
+
+\textbf{Важно}: \emph{тот} \emph{же} \texttt{termios}, что
+в \emph{первой} книге. \emph{Принципы}~--- те же, только
+\emph{устройство} другое (USB CDC вместо UART).
+
+\subsection{osc\_reader.c: самое интересное}
+
+\textbf{Что делает}: \emph{читает} данные из порта
+в \emph{отдельном} потоке.
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+static gpointer osc_reader_thread(gpointer data)
+{
+    AppState *st = data;
+    uint8_t buf[8192];
+    size_t have = 0;
+
+    while (st->osc_thread_run) {
+        ssize_t r = read(st->fd_osc, buf + have,
+                         sizeof(buf) - have);
+        if (r <= 0) {
+            g_usleep(1000);
+            continue;
+        }
+        have += (size_t)r;
+
+        /* Поиск sync 0x55 0xAA */
+        size_t pos = 0;
+        while (have >= 8) {
+            if (!(buf[pos] == 0x55 && buf[pos + 1] == 0xAA)) {
+                pos++;
+                have--;
+                continue;
+            }
+            /* ... */
+        }
+    }
+    return NULL;
+}
+\end{minted}
+\caption{Поток чтения осциллографа}
+\label{lst:arch-osc-reader}
+\end{listing}
+
+\textbf{Что здесь важно}:
+
+\begin{itemize}
+    \item \textbf{Отдельный поток}~--- \texttt{read()}
+          \emph{блокируется}, пока нет данных. Если
+          делать это в \emph{главном} потоке~---
+          интерфейс \emph{зависнет}.
+    \item \textbf{Буфер 8192 байт}~--- \emph{достаточно}
+          для нескольких кадров \texttt{OSC\_DATA}.
+    \item \textbf{Поиск sync}~--- \emph{синхронизация}
+          по маркеру \texttt{0x55 0xAA}.
+    \item \textbf{g\_usleep(1000)}~--- если данных
+          нет~--- \emph{подождать} 1 мс, не \emph{жечь}
+          CPU.
+\end{itemize}
+
+\begin{warnbox}
+\textbf{Поток~--- это сложно.} Нужно \emph{синхронизировать}
+доступ к общим данным через \texttt{GMutex}. Нужно
+\emph{корректно} завершать поток. Нужно \emph{не} трогать
+GTK из потока~--- только \texttt{gtk\_widget\_queue\_draw()}.
+\textbf{Мы разберём это в главе 12.}
+\end{warnbox}
+
+\subsection{draw\_scope.c}
+
+\textbf{Что делает}: \emph{рисует} осциллограмму через
+\textbf{Cairo}.
+
+\begin{itemize}
+    \item \texttt{draw\_scope()}~--- \emph{колбэк}
+          для \texttt{GtkDrawingArea}.
+    \item \textbf{Масштабирование}~--- \emph{подгонка}
+          данных под размер виджета.
+    \item \textbf{Сетка}, \textbf{оси}, \textbf{метки}~---
+          \emph{как} в \emph{первой} книге.
+\end{itemize}
+
+\subsection{ui.c}
+
+\textbf{Что делает}: \emph{создаёт} весь интерфейс.
+
+\begin{itemize}
+    \item \texttt{app\_activate()}~--- \emph{главная}
+          функция активации.
+    \item \texttt{build\_scope\_tab()}~--- \emph{вкладка}
+          осциллографа.
+    \item \texttt{build\_generator\_tab()}~--- \emph{вкладка}
+          генератора.
+\end{itemize}
+
+\begin{ideabox}
+\textbf{Разделение ответственности~--- ключ.} \texttt{ui.c}
+\emph{не знает}, как \emph{работает} порт. \texttt{serial\_port.c}
+\emph{не знает}, как \emph{выглядит} интерфейс. Каждый
+модуль~--- \emph{своя} задача.
+\end{ideabox}
+
+\subsection{main.c: короткий}
+
+\textbf{Что делает}: \emph{точка} входа.
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+int main(int argc, char **argv)
+{
+    AppState st = {0};
+    g_mutex_init(&st.osc_lock);
+
+    GtkApplication *app = gtk_application_new(
+        "student.oscgen", G_APPLICATION_DEFAULT_FLAGS);
+    g_signal_connect(app, "activate",
+                     G_CALLBACK(app_activate), &st);
+
+    int status = g_application_run(G_APPLICATION(app),
+                                   argc, argv);
+    g_object_unref(app);
+
+    /* Остановить поток, закрыть порты */
+    if (st.osc_thread) {
+        st.osc_thread_run = false;
+        g_thread_join(st.osc_thread);
+    }
+    if (st.fd_osc > 0) close(st.fd_osc);
+    if (st.fd_gen > 0) close(st.fd_gen);
+
+    return status;
+}
+\end{minted}
+\caption{\texttt{main.c}~--- точка входа}
+\label{lst:arch-main}
+\end{listing}
+
+\textbf{Что здесь важно}:
+
+\begin{itemize}
+    \item \texttt{gtk\_application\_new()}~--- \emph{новый}
+          API GTK4. Про \emph{старый} (\texttt{gtk\_init})
+          мы говорили в \emph{первой} книге.
+    \item \texttt{g\_mutex\_init()}~--- \emph{инициализация}
+          мьютекса \emph{до} запуска потока.
+    \item \texttt{g\_thread\_join()}~--- \emph{корректное}
+          завершение потока \emph{перед} выходом.
+    \item \texttt{close(st.fd\_osc)}~--- \emph{закрытие}
+          портов \emph{после} остановки потока.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Порядок завершения~--- важен.} Сначала~---
+\emph{остановить} поток. Потом~--- \emph{закрыть} порты.
+\emph{Наоборот}~--- поток может \emph{читать} из
+\emph{закрытого} порта~--- и \emph{упадёт}.
+\end{keybox}
+
+%%%%%%%===============================
+
+
+
+
+
+\section{Модули прошивки}
+\label{sec:arch-firmware-modules}
+
+ПК-приложение~--- это \emph{одна} программа. Прошивка~---
+это \textbf{две} программы: для осциллографа и для генератора.
+У каждой~--- \emph{свои} модули.
+
+\subsection{Осциллограф (Nucleo-F401RE)}
+
+Прошивка осциллографа состоит из \emph{четырёх} модулей.
+
+\begin{table}[htbp]
+\centering
+\caption{Модули прошивки осциллографа}
+\label{tab:arch-osc-modules}
+\small
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\textbf{Модуль} & \textbf{Ответственность} \\
+\midrule
+\texttt{adc.c}     & Настройка ADC: частота, разрешение, каналы \\
+\texttt{dma.c}     & Двойной буфер (ping-pong), прерывания \\
+\texttt{trigger.c} & Триггер: уровень, фронт, режим \\
+\texttt{usb\_cdc.c} & Отправка кадров \texttt{OSC\_DATA}, приём команд \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\textbf{Как это работает}:
+
+\begin{enumerate}
+    \item \texttt{adc.c} \emph{настраивает} ADC на \emph{частоту}
+          дискретизации (например, \SI{100}{\kilo\hertz}).
+    \item \texttt{dma.c} \emph{запускает} DMA~--- \emph{двойной}
+          буфер (ping-pong). Пока \emph{одна} половина
+          заполняется~--- \emph{другая} отдаётся прошивке.
+    \item \texttt{trigger.c} \emph{ищет} \emph{начало} сигнала~---
+          момент, когда напряжение \emph{пересекает} заданный
+          уровень.
+    \item \texttt{usb\_cdc.c} \emph{упаковывает} семплы в кадры
+          \texttt{OSC\_DATA} и \emph{отправляет} их на ПК.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Ключевая идея~--- ping-pong.} Пока DMA \emph{пишет}
+в \emph{первую} половину буфера~--- прошивка \emph{читает}
+\emph{вторую}. Когда первая \emph{заполнилась}~---
+они \emph{меняются} местами. Так \emph{непрерывно} захватываем
+сигнал, \emph{не} теряя данные.
+\end{keybox}
+
+\subsection{Генератор (Blue Pill)}
+
+Прошивка генератора тоже состоит из \emph{четырёх} модулей.
+
+\begin{table}[htbp]
+\centering
+\caption{Модули прошивки генератора}
+\label{tab:arch-gen-modules}
+\small
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\textbf{Модуль} & \textbf{Ответственность} \\
+\midrule
+\texttt{dac.c}       & Настройка DAC: частота, разрешение \\
+\texttt{pwm.c}       & Альтернатива DAC для меандра \\
+\texttt{wave\_table.c} & Таблицы форм (синус, пила, треугольник) \\
+\texttt{usb\_cdc.c}  & Приём команд, отправка ответов \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\textbf{Как это работает}:
+
+\begin{enumerate}
+    \item \texttt{usb\_cdc.c} \emph{принимает} команды
+          (set\_wave, set\_freq, set\_ampl).
+    \item \texttt{wave\_table.c} \emph{заполняет} таблицу
+          формы (256 или 1024 точки).
+    \item \texttt{dac.c} \emph{запускает} DMA circular~---
+          таблица \emph{воспроизводится} \emph{бесконечно}.
+    \item \texttt{pwm.c} \emph{используется} для \emph{меандра}~---
+          когда нужна \emph{точная} частота и \emph{скважность}.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Почему \emph{два} способа~--- DAC и PWM?} DAC даёт
+\emph{плавный} сигнал (синус, пила). PWM~--- \emph{прямоугольник}
+с \emph{регулируемой} скважностью. Для \emph{меандра} PWM
+\emph{лучше}~--- он \emph{точнее} и \emph{проще}.
+\end{ideabox}
+
+\section{Границы проекта}
+\label{sec:arch-boundaries}
+
+\textbf{Важно} \emph{обозначить}, что \emph{входит} в проект,
+а что~--- \emph{нет}. Иначе читатель \emph{ждёт} большего,
+чем мы \emph{можем} дать.
+
+\subsection{Что мы \emph{делаем}}
+
+\begin{itemize}
+    \item \textbf{Осциллограф} на \SI{500}{\kilo\hertz}~---
+          \emph{один} канал, \SI{12}{\bit}.
+    \item \textbf{Триггер} по уровню и фронту~---
+          \emph{простой}, но \emph{рабочий}.
+    \item \textbf{Генератор} до \SI{100}{\kilo\hertz}~---
+          \emph{шесть} форм.
+    \item \textbf{Протокол}~--- \emph{бинарный}, с CRC16.
+    \item \textbf{ПК-приложение} на GTK4~--- \emph{потоки},
+          \emph{Cairo}, \emph{управление}.
+\end{itemize}
+
+\subsection{Что мы \emph{не} делаем}
+
+\begin{itemize}
+    \item \textbf{Не} пишем \emph{полноценный} осциллограф
+          на \SI{150}{\mega\hertz} (как HANTEK).
+    \item \textbf{Не} делаем \emph{многоканальный} осциллограф
+          (\emph{только} один канал).
+    \item \textbf{Не} поддерживаем \emph{все} формы сигналов
+          (\emph{шесть}~--- достаточно).
+    \item \textbf{Не} делаем \emph{FFT} (спектральный анализ).
+    \item \textbf{Не} пишем \emph{драйверы} ядра~---
+          \emph{используем} стандартные.
+    \item \textbf{Не} поддерживаем \emph{Windows}~---
+          \emph{только} Linux.
+\end{itemize}
+
+\begin{warnbox}
+\textbf{Честность~--- важна.} Мы \emph{не} обещаем
+<<профессиональный осциллограф>>. Мы обещаем
+\textbf{учебный проект}, который \emph{работает} и
+\emph{объясняет}, как устроены \emph{настоящие} приборы.
+\end{warnbox}
+
+\section{Уроки главы}
+\label{sec:arch-lessons}
+
+\begin{enumerate}
+    \item \textbf{Три мира:} осциллограф, генератор, ПК.
+          У каждого~--- \emph{своя} задача.
+    \item \textbf{Потоки данных:} команды~--- вниз,
+          данные~--- вверх.
+    \item \textbf{Монолитный \texttt{main.c}~--- плохо.}
+          \emph{Шесть} модулей на ПК~--- лучше.
+    \item \textbf{Поток чтения~--- сложно, но необходимо.}
+          Без него интерфейс \emph{зависнет}.
+    \item \textbf{Разделение ответственности~--- ключ.}
+          Каждый модуль делает \emph{одну} вещь.
+    \item \textbf{Ping-pong DMA}~--- \emph{непрерывный}
+          захват сигнала.
+    \item \textbf{Границы проекта~--- важно обозначить.}
+          Честность с читателем.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:arch-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли архитектуры}
+\label{tab:arch-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & Монолитный \texttt{main.c} & Разбить на модули \\
+2 & Чтение в главном потоке & Отдельный поток \\
+3 & Гонка данных & \texttt{GMutex} \\
+4 & Зависание при закрытии & \texttt{g\_thread\_join()} \\
+5 & Забыли \texttt{g\_mutex\_init()} & Инициализация до потока \\
+6 & Закрытие порта до остановки потока & Порядок важен \\
+7 & Модуль делает слишком много & Разделить \\
+8 & Нет границ проекта & Обозначить \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:arch-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Нарисуйте \emph{диаграмму} своих
+модулей для \emph{своего} проекта. Какие модули у вас есть?
+Как они связаны?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Разбейте \emph{монолитный}
+\texttt{main.c} из репозитория на \emph{модули}.
+Сколько файлов получилось? Какие функции в каждом?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Объясните \emph{одним предложением},
+за что отвечает каждый модуль \emph{вашего} проекта.
+Если не получается~--- \emph{пересмотрите} границы.
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Предложите \emph{свои} границы проекта~---
+что бы вы \emph{добавили} в наш? Что \emph{убрали}?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:arch-check}
+
+\begin{enumerate}
+    \item Откройте репозиторий \texttt{dualboard-stm32-oscilloscope}.
+    \item Найдите \texttt{main.c} для ПК.
+    \item Посчитайте, сколько \emph{функций} в нём.
+    \item Разбейте их на \emph{шесть} модулей (список).
+    \item Нарисуйте \emph{диаграмму} зависимостей.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли архитектуру.} Это
+\emph{главное}. Код~--- \emph{следствие}. Архитектура~---
+\emph{причина}.
+\end{ideabox}
+
+
+
+

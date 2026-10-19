@@ -1,0 +1,4 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+st\PYGZhy{}flash\PYG{+w}{ }\PYG{n+nb}{read}\PYG{+w}{ }/tmp/test\PYGZhy{}read.bin\PYG{+w}{ }0x08000000\PYG{+w}{ }\PYG{l+m}{8}
+hexdump\PYG{+w}{ }\PYGZhy{}C\PYG{+w}{ }/tmp/test\PYGZhy{}read.bin
+\end{MintedVerbatim}

@@ -1,0 +1,3 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+openocd\PYG{+w}{ }\PYGZhy{}f\PYG{+w}{ }interface/stlink.cfg\PYG{+w}{ }\PYGZhy{}f\PYG{+w}{ }target/stm32f4x.cfg
+\end{MintedVerbatim}

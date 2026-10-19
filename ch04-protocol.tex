@@ -1,0 +1,798 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch04-protocol.tex
+%  Протокол обмена: кадры, CRC16, команды
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Протокол обмена}
+\label{ch:protocol}
+
+\epigraph{<<Протокол~--- это язык, на котором говорят устройства.
+Если язык плохой~--- они не поймут друг друга>>.}{}
+
+\section{Введение}
+\label{sec:protocol-intro}
+
+В \texttt{ch03} мы увидели \emph{три мира}: осциллограф,
+генератор и ПК. Они \emph{общаются} друг с другом. Но
+\emph{как} именно? По \textbf{протоколу}.
+
+\begin{ideabox}
+\textbf{Протокол~--- это \emph{контракт}.} Он говорит:
+<<если ты пришлёшь \emph{такие} байты, я отвечу \emph{такими}>>.
+Без контракта~--- \emph{хаос}. С контрактом~--- \emph{порядок}.
+\end{ideabox}
+
+\subsection{Зачем нужен протокол}
+
+Представьте, что ПК отправляет генератору команду
+<<поставь частоту 1 кГц>>. Что именно \emph{уйдёт} в порт?
+Один байт? Строка <<1000>>? А если генератор \emph{не
+успел} прочитать~--- как ПК узнает, что команда \emph{потерялась}?
+
+\textbf{Протокол} отвечает на все эти вопросы:
+\begin{itemize}
+    \item \textbf{Как} упаковать команду (формат).
+    \item \textbf{Как} проверить целостность (CRC).
+    \item \textbf{Как} понять, что это \emph{новый} кадр, а не
+          \emph{продолжение} старого (sync).
+    \item \textbf{Как} сопоставить запрос и ответ (seq).
+\end{itemize}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Из каких \emph{полей} состоит кадр.
+    \item Что такое \texttt{sync}, \texttt{seq}, \texttt{crc16}.
+    \item Как \emph{считать} CRC16/IBM.
+    \item Какие \emph{команды} понимают генератор и осциллограф.
+    \item Как \emph{устроен} кадр данных \texttt{OSC\_DATA}.
+\end{itemize}
+
+\section{Формат кадра}
+\label{sec:protocol-frame}
+
+\textbf{Кадр}~--- это \emph{единица} обмена. Каждая команда,
+каждый ответ, каждый блок данных~--- это \emph{один} кадр.
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    field/.style={
+        draw, thick,
+        minimum height=1cm,
+        align=center,
+        font=\footnotesize\ttfamily,
+        fill=white
+    },
+    header/.style={field, fill=clrUIData!20},
+    payload/.style={field, fill=clrLogicData!20},
+    crc/.style={field, fill=clrWarn!20},
+    label/.style={
+        font=\footnotesize,
+        above,
+        inner sep=2pt
+    },
+    size/.style={
+        font=\scriptsize,
+        below,
+        inner sep=2pt
+    }
+]
+
+% Поля кадра
+\node[header, minimum width=1.5cm] (sync) at (0, 0) {sync};
+\node[header, minimum width=1cm, right=0cm of sync] (ver) {ver};
+\node[header, minimum width=1.5cm, right=0cm of ver] (seq) {seq};
+\node[header, minimum width=1.2cm, right=0cm of seq] (cmd) {cmd};
+\node[header, minimum width=1.5cm, right=0cm of cmd] (len) {len};
+\node[payload, minimum width=3cm, right=0cm of len] (payload) {payload};
+\node[crc, minimum width=1.5cm, right=0cm of payload] (crc) {crc16};
+
+% Подписи сверху
+\node[label] at (sync.north) {0xAA55};
+\node[label] at (ver.north) {0x01};
+\node[label] at (seq.north) {seq++};
+\node[label] at (cmd.north) {cmd};
+\node[label] at (len.north) {len};
+\node[label] at (payload.north) {данные};
+\node[label] at (crc.north) {CRC-16/IBM};
+
+% Размеры снизу
+\node[size] at (sync.south) {2 байта};
+\node[size] at (ver.south) {1};
+\node[size] at (seq.south) {2};
+\node[size] at (cmd.south) {1};
+\node[size] at (len.south) {2};
+\node[size] at (payload.south) {len байт};
+\node[size] at (crc.south) {2};
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Структура кадра протокола. Сверху~--- значения,
+снизу~--- размеры полей.}
+\label{fig:protocol-frame}
+\end{figure}
+
+\subsection{Поле \texttt{sync}: маркер начала}
+
+\begin{center}
+\texttt{0x55 0xAA} (\texttt{0xAA55} в little-endian)
+\end{center}
+
+\textbf{Sync}~--- это <<якорь>>. Приёмник \emph{сканирует}
+поток байтов, пока не найдёт \texttt{0x55}, за которым
+следует \texttt{0xAA}. Всё, что было \emph{до}~--- \emph{мусор}.
+
+\begin{keybox}
+\textbf{Зачем нужен sync?} Порт~--- это \emph{поток байтов}.
+Если приёмник \emph{пропустил} начало кадра (например,
+из-за \emph{переполнения} буфера), он должен \emph{найти}
+следующий. Sync~--- \emph{уникальная} последовательность,
+которой \emph{нет} в данных.
+\end{keybox}
+
+\subsection{Поле \texttt{ver}: версия протокола}
+
+\begin{center}
+\texttt{0x01}
+\end{center}
+
+\textbf{Версия}~--- это \emph{запас} на будущее. Если
+мы \emph{изменим} протокол (добавим поля)~--- версия
+\emph{позволит} старым устройствам \emph{игнорировать}
+новые кадры.
+
+\subsection{Поле \texttt{seq}: счётчик}
+
+\begin{center}
+\texttt{0x0000}--\texttt{0xFFFF} (2 байта)
+\end{center}
+
+\textbf{Seq} (sequence number)~--- это \emph{счётчик}
+запросов. Каждый новый кадр \emph{увеличивает} его на 1.
+Ответ содержит \emph{тот же} \texttt{seq}.
+
+\begin{ideabox}
+\textbf{Зачем нужен seq?} Если ПК отправил \emph{две}
+команды подряд, а генератор \emph{ответил} только
+на \emph{одну}~--- по \texttt{seq} можно понять,
+\emph{какая} потерялась. Также \texttt{seq} \emph{защищает}
+от \emph{дубликатов} (если кадр пришёл дважды~---
+второй \emph{игнорируется}).
+\end{ideabox}
+
+\subsection{Поле \texttt{cmd}: код команды}
+
+\begin{center}
+\texttt{0x10}--\texttt{0x1F} (генератор), \texttt{0x20}--\texttt{0x2F} (осциллограф)
+\end{center}
+
+\textbf{Cmd}~--- это <<что делать>>. Диапазоны:
+\begin{itemize}
+    \item \texttt{0x10}--\texttt{0x1F}~--- команды генератору.
+    \item \texttt{0x20}--\texttt{0x2F}~--- команды осциллографу.
+    \item \texttt{0x40}~--- кадр данных \texttt{OSC\_DATA}.
+    \item \texttt{0x80}~--- бит ответа (например, \texttt{0x90}~--- ответ на \texttt{0x10}).
+\end{itemize}
+
+\subsection{Поле \texttt{len}: длина данных}
+
+\begin{center}
+\texttt{0x0000}--\texttt{0xFFFF} (2 байта)
+\end{center}
+
+\textbf{Len}~--- \emph{сколько} байт в \texttt{payload}.
+Нужна, чтобы \emph{знать}, когда кадр \emph{закончится}.
+
+\subsection{Поле \texttt{payload}: данные}
+
+\begin{center}
+\texttt{len} байт
+\end{center}
+
+\textbf{Payload}~--- \emph{полезная нагрузка}. Для команды
+\texttt{set\_freq}~--- это \SI{4}{\byte} (частота).
+Для \texttt{OSC\_DATA}~--- это \emph{семплы} сигнала.
+
+\subsection{Поле \texttt{crc16}: контрольная сумма}
+
+\begin{center}
+\texttt{0x0000}--\texttt{0xFFFF} (2 байта)
+\end{center}
+
+\textbf{CRC16}~--- это \emph{контрольная сумма}. Считается
+от поля \texttt{ver} до конца \texttt{payload}. Если
+при вычислении \emph{совпала} с принятой~--- кадр \emph{целый}.
+Если \emph{нет}~--- кадр \emph{битый}.
+
+\begin{warnbox}
+\textbf{CRC не защищает от всего.} Она \emph{ловит}
+\emph{случайные} ошибки (помехи, сбой USB). Но
+\emph{не} ловит \emph{умышленные} подмены. Для
+наших задач~--- \emph{достаточно}.
+\end{warnbox}
+
+\section{CRC16/IBM: как считается}
+\label{sec:protocol-crc16}
+
+\textbf{CRC16/IBM} (также известный как \textbf{CRC-16-ANSI})
+~--- это \emph{стандартный} алгоритм. Полином~---
+\texttt{0xA001}, начальное значение~--- \texttt{0xFFFF}.
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+uint16_t crc16_ibm(const uint8_t *data, size_t len)
+{
+    uint16_t crc = 0xFFFF;
+
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (uint8_t bit = 0; bit < 8; bit++) {
+            if (crc & 1) {
+                crc = (crc >> 1) ^ 0xA001;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    return crc;
+}
+\end{minted}
+\caption{\texttt{crc16\_ibm()}~--- подсчёт CRC16}
+\label{lst:protocol-crc16}
+\end{listing}
+
+\subsection{Что такое XOR (исключающее ИЛИ)}
+
+Прежде чем разбирать алгоритм~--- поймём \emph{одну}
+операцию. \textbf{XOR} (в C~--- \texttt{\^{}})~--- это
+\emph{побитовое} <<исключающее ИЛИ>>. Оно возвращает
+\texttt{1}, \emph{только} если биты \emph{разные}:
+
+\begin{center}
+\begin{tabular}{cc|c}
+\textbf{A} & \textbf{B} & \textbf{A \texttt{\^{}} B} \\
+\hline
+0 & 0 & 0 \\
+0 & 1 & 1 \\
+1 & 0 & 1 \\
+1 & 1 & 0 \\
+\end{tabular}
+\end{center}
+
+Например, \texttt{0xAA \^{} 0x0F}:
+\[
+\texttt{10101010} \oplus \texttt{00001111} = \texttt{10100101}
+\]
+
+\subsection{Как работает алгоритм}
+
+\begin{enumerate}
+    \item Начинаем с \texttt{crc = 0xFFFF}.
+    \item Для \emph{каждого} байта:
+    \begin{itemize}
+        \item \emph{Выполняем} \texttt{crc \^{}= data[i]}~---
+              \emph{XOR} младшего байта \texttt{crc} с байтом данных.
+        \item Для \emph{каждого} из \emph{восьми} бит:
+        \begin{itemize}
+            \item Если младший бит \texttt{crc} равен \texttt{1}~---
+                  \emph{сдвигаем} вправо на 1 и \emph{XOR} с \texttt{0xA001}.
+            \item Если \texttt{0}~--- просто \emph{сдвигаем} вправо.
+        \end{itemize}
+    \end{itemize}
+    \item Возвращаем \texttt{crc}.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Почему именно \texttt{0xA001}?} Это \emph{обратный}
+полином \texttt{0x8005}. Число \texttt{0xA001}~---
+это \emph{стандарт} для CRC16/IBM. \emph{Менять} его
+нельзя~--- иначе другая сторона \emph{не} поймёт
+контрольную сумму.
+\end{keybox}
+
+\begin{ideabox}
+\textbf{Зачем так сложно?} CRC~--- это \emph{математически
+обоснованный} способ \emph{поймать} ошибки. Простая
+сумма байтов \emph{не} ловит \emph{перестановки}.
+CRC ловит \emph{большинство} случайных искажений~---
+и \emph{очень} быстрый (всего \emph{несколько} операций
+на байт).
+\end{ideabox}
+
+
+
+\begin{keybox}
+\textbf{Проверка CRC~--- это \emph{фильтр}.} Если CRC \emph{не}
+совпала~--- кадр \emph{выбрасываем} и \emph{продолжаем}
+сканировать поток. Это \emph{защищает} от мусора.
+\end{keybox}
+
+\section{Команды генератора}
+\label{sec:protocol-gen-cmds}
+
+Генератор понимает \emph{шесть} команд (и \emph{одну}~--- статус).
+
+\begin{table}[htbp]
+\centering
+\caption{Команды генератора (0x10–0x1F)}
+\label{tab:protocol-gen-cmds}
+\small
+\begin{tabularx}{\textwidth}{@{}c l l L@{}}
+\toprule
+\textbf{Код} & \textbf{Имя} & \textbf{Payload} & \textbf{Назначение} \\
+\midrule
+\texttt{0x10} & set\_wave   & \texttt{u8 type} & Форма сигнала \\
+\texttt{0x11} & set\_freq   & \texttt{u32 mHz} & Частота (миллигерцы) \\
+\texttt{0x12} & set\_ampl   & \texttt{u16 mVpp} & Амплитуда \\
+\texttt{0x13} & set\_offset & \texttt{i16 mV} & Смещение \\
+\texttt{0x14} & set\_duty   & \texttt{u16 permille} & Скважность \\
+\texttt{0x15} & upload\_wave & \texttt{u16 n, n×u16} & Пользовательская форма \\
+\texttt{0x1F} & get\_gen\_status & --- & Запрос статуса \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Формы сигнала (0x10)}
+
+\texttt{u8 type}:
+\begin{itemize}
+    \item \texttt{0}~--- синус.
+    \item \texttt{1}~--- двухполупериодный.
+    \item \texttt{2}~--- однополупериодный.
+    \item \texttt{3}~--- пила.
+    \item \texttt{4}~--- треугольник.
+    \item \texttt{5}~--- меандр.
+    \item \texttt{6}~--- пользовательская.
+\end{itemize}
+
+\subsection{Частота (0x11)}
+
+\texttt{u32 mHz}~--- частота в \emph{миллигерцах}
+(1 Гц = 1000 мГц). \textbf{Зачем так?} Чтобы \emph{избежать}
+дробных чисел. \SI{1.5}{\kilo\hertz} = \num{1500000} мГц.
+
+\subsection{Ответ (0x1F)}
+
+Ответ на \texttt{get\_gen\_status}~--- это кадр с \texttt{cmd=0x9F}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{text}
+u8 wave; u32 freq_mHz; u16 ampl_mVpp;
+i16 offset_mV; u16 duty_permille;
+\end{minted}
+
+\section{Команды осциллографа}
+\label{sec:protocol-osc-cmds}
+
+Осциллограф понимает \emph{пять} команд (и \emph{одну}~--- статус).
+
+\begin{table}[htbp]
+\centering
+\caption{Команды осциллографа (0x20–0x2F)}
+\label{tab:protocol-osc-cmds}
+\small
+\begin{tabularx}{\textwidth}{@{}c l l L@{}}
+\toprule
+\textbf{Код} & \textbf{Имя} & \textbf{Payload} & \textbf{Назначение} \\
+\midrule
+\texttt{0x20} & set\_fs      & \texttt{u32 Hz} & Частота дискретизации \\
+\texttt{0x21} & set\_gain    & \texttt{u8 step} & Усиление \\
+\texttt{0x22} & set\_trigger & \texttt{u8 mode, i16 level\_mV, u8 edge} & Триггер \\
+\texttt{0x23} & capture\_once & \texttt{u16 pre\_pct, u16 samples} & Одиночный захват \\
+\texttt{0x24} & stream\_on   & \texttt{u8 on} & Запуск/остановка потока \\
+\texttt{0x2F} & get\_osc\_status & --- & Запрос статуса \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Триггер (0x22)}
+
+\texttt{set\_trigger}~--- \emph{самая сложная} команда:
+\begin{itemize}
+    \item \texttt{mode}~--- \texttt{0} выкл, \texttt{1} нормальный, \texttt{2} авто.
+    \item \texttt{level\_mV}~--- уровень, в милливольтах.
+    \item \texttt{edge}~--- \texttt{0} по фронту, \texttt{1} по спаду.
+\end{itemize}
+
+\subsection{Поток (0x24)}
+
+\texttt{stream\_on}~--- \emph{ключевая} команда. Включает
+\emph{непрерывную} отправку кадров \texttt{OSC\_DATA}.
+
+
+
+
+
+%%%%%=======================================
+
+
+
+
+\section{Кадр данных \texttt{OSC\_DATA}}
+\label{sec:protocol-osc-data}
+
+\texttt{OSC\_DATA}~--- это \emph{особый} кадр. В нём
+\texttt{cmd = 0x40}, а \texttt{payload}~--- это
+\emph{упакованные} семплы сигнала.
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    field/.style={
+        draw, thick,
+        minimum height=1cm,
+        align=center,
+        font=\footnotesize\ttfamily,
+        fill=white
+    },
+    meta/.style={field, fill=clrStateData!20},
+    data/.style={field, fill=clrLogicData!20},
+    label/.style={
+        font=\footnotesize,
+        above,
+        inner sep=2pt
+    },
+    size/.style={
+        font=\scriptsize,
+        below,
+        inner sep=2pt
+    }
+]
+
+% Поля payload
+\node[meta, minimum width=2cm] (fs) at (0, 0) {fs\_hz};
+\node[meta, minimum width=1cm, right=0cm of fs] (ch) {ch};
+\node[meta, minimum width=2cm, right=0cm of ch] (ns) {nsamples};
+\node[meta, minimum width=1.5cm, right=0cm of ns] (pre) {pretrig};
+\node[data, minimum width=4cm, right=0cm of pre] (samples) {samples[]};
+
+% Подписи сверху
+\node[label] at (fs.north) {u32};
+\node[label] at (ch.north) {u8};
+\node[label] at (ns.north) {u16};
+\node[label] at (pre.north) {u16};
+\node[label] at (samples.north) {u16 × nsamples};
+
+% Размеры снизу
+\node[size] at (fs.south) {4 байта};
+\node[size] at (ch.south) {1};
+\node[size] at (ns.south) {2};
+\node[size] at (pre.south) {2};
+\node[size] at (samples.south) {2 × N};
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Структура \texttt{payload} кадра \texttt{OSC\_DATA}.}
+\label{fig:protocol-osc-data}
+\end{figure}
+
+\subsection{Разбор полей}
+
+\begin{itemize}
+    \item \texttt{fs\_hz}~--- частота дискретизации, в герцах.
+    \item \texttt{ch}~--- номер канала (у нас~--- \texttt{0}).
+    \item \texttt{nsamples}~--- количество семплов в кадре.
+    \item \texttt{pretrig}~--- сколько семплов \emph{до} триггера.
+    \item \texttt{samples[]}~--- сами семплы (\texttt{u16}).
+\end{itemize}
+
+\begin{keybox}
+\textbf{Почему \texttt{u16}, а не \texttt{u12}?} ADC у STM32F401~---
+\SI{12}{\bit}. Но передавать \emph{упакованные} 12-битные
+значения~--- \emph{сложно} (не выровнены по байтам).
+Проще~--- \emph{дополнить} до 16 бит (\texttt{u16}).
+Потеря~--- \emph{минимальная}, код~--- \emph{проще}.
+\end{keybox}
+
+\section{Отправка кадра}
+\label{sec:protocol-send}
+
+\textbf{Отправка}~--- это \emph{сборка} кадра и \emph{запись}
+его в порт.
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+static bool send_cmd(int fd, uint8_t cmd,
+                     const uint8_t *payload,
+                     uint16_t len, uint16_t *seq)
+{
+    if (fd < 0) return false;
+    uint8_t buf[256];
+    if (len > sizeof(buf) - 9) return false;
+
+    uint16_t s = ++(*seq);
+    size_t idx = 0;
+
+    buf[idx++] = 0x55;       // sync low
+    buf[idx++] = 0xAA;       // sync high
+    buf[idx++] = 0x01;       // ver
+    buf[idx++] = s & 0xFF;   // seq low
+    buf[idx++] = s >> 8;     // seq high
+    buf[idx++] = cmd;        // cmd
+    buf[idx++] = len & 0xFF; // len low
+    buf[idx++] = len >> 8;   // len high
+
+    if (payload && len) {
+        memcpy(&buf[idx], payload, len);
+    }
+    size_t hdr_len = idx + len;
+    uint16_t crc = crc16_ibm(&buf[2], hdr_len - 2);
+    buf[hdr_len] = crc & 0xFF;
+    buf[hdr_len + 1] = crc >> 8;
+
+    ssize_t w = write(fd, buf, hdr_len + 2);
+    return w == (ssize_t)(hdr_len + 2);
+}
+\end{minted}
+\caption{\texttt{send\_cmd()}~--- отправка кадра}
+\label{lst:protocol-send}
+\end{listing}
+
+\subsection{Что здесь важно}
+
+\begin{enumerate}
+    \item \textbf{Буфер фиксированного размера} (\texttt{256}).
+          \emph{Защита} от переполнения.
+    \item \textbf{Инкремент} \texttt{seq}~--- \emph{каждый} кадр
+          получает \emph{новый} номер.
+    \item \textbf{Сборка} \emph{поля} за \emph{полем}~---
+          \emph{байт} за \emph{байтом} (little-endian).
+    \item \textbf{CRC} \emph{считается} от \texttt{ver} до конца
+          \texttt{payload} (\texttt{buf[2]}~--- \emph{начало}).
+    \item \textbf{Запись} \emph{всего} кадра за \emph{один}
+          \texttt{write()}~--- \emph{атомарно}.
+\end{enumerate}
+
+\begin{warnbox}
+\textbf{Почему \texttt{write()} за один раз?} Потому что это атомарно~--- целиком или никак. Если \emph{писать} по \emph{байту}, между вызовами может \emph{вклиниться} что-то ещё~--- \emph{нарушится} кадр. \emph{Один} \texttt{write()}~--- \emph{атомарная} операция.
+\end{warnbox}
+
+\begin{keybox}
+\textbf{Что значит <<атомарно>>?} \emph{Атомарная} операция~---
+это операция, которая выполняется \emph{целиком} или
+\emph{не выполняется вовсе}. Никакой \emph{другой} поток
+\emph{не может} вклиниться в её середину и увидеть
+<<половину>>.
+
+\textbf{Пример}: \texttt{write(fd, buf, 100)}~--- атомарно.
+Ядро запишет \emph{все} 100 байт или \emph{ничего}.
+А \texttt{100} вызовов \texttt{write(fd, buf+i, 1)}~---
+\emph{не} атомарно: между ними \emph{может} вклиниться
+другой поток и \emph{испортить} кадр.
+\end{keybox}
+
+
+\section{Приём кадра}
+\label{sec:protocol-receive}
+
+\textbf{Приём}~--- это \emph{самое} \emph{сложное}. Поток
+байтов \emph{непрерывен}. \emph{Как} найти \emph{начало}
+кадра?
+
+\subsection{Пошаговый парсер}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+// Внутри osc_reader_thread
+size_t pos = 0;
+while (have >= 8) {
+    // 1. Ищем sync 0x55 0xAA
+    if (!(buf[pos] == 0x55 && buf[pos + 1] == 0xAA)) {
+        pos++;
+        have--;
+        continue;
+    }
+
+    // 2. Сдвигаем буфер, если нужно
+    if (pos > 0) {
+        memmove(buf, buf + pos, have);
+        pos = 0;
+    }
+
+    // 3. Читаем заголовок
+    uint8_t ver = buf[2];
+    uint16_t seq = buf[3] | (buf[4] << 8);
+    uint8_t cmd = buf[5];
+    uint16_t len = buf[6] | (buf[7] << 8);
+
+    // 4. Ждём весь кадр
+    size_t frame_len = 8 + len + 2;
+    if (have < frame_len) break;
+
+    // 5. Проверяем CRC
+    uint16_t crc_calc = crc16_ibm(&buf[2], 6 + len);
+    uint16_t crc_rx = buf[8 + len] | (buf[9 + len] << 8);
+    if (crc_calc != crc_rx) {
+        memmove(buf, buf + 2, have - 2);
+        have -= 2;
+        continue;
+    }
+
+    // 6. Обрабатываем кадр
+    if (cmd == 0x40) {
+        // OSC_DATA
+        // ...
+    }
+
+    // 7. Сдвигаем буфер
+    memmove(buf, buf + frame_len, have - frame_len);
+    have -= frame_len;
+}
+\end{minted}
+\caption{Парсер кадра в потоке}
+\label{lst:protocol-receive}
+\end{listing}
+
+\subsection{Разбор шагов}
+
+\begin{enumerate}
+    \item \textbf{Поиск sync}. \emph{Сканируем} байты, пока
+          не \emph{найдём} \texttt{0x55 0xAA}.
+    \item \textbf{Сдвиг буфера}. \emph{Убираем} мусор \emph{до}
+          sync.
+    \item \textbf{Чтение заголовка}. \emph{Извлекаем} поля
+          (little-endian).
+    \item \textbf{Ожидание кадра}. Если в буфере \emph{меньше}
+          \texttt{frame\_len}~--- \emph{ждём} следующего
+          \texttt{read()}.
+    \item \textbf{Проверка CRC}. Если \emph{не} совпала~---
+          \emph{сдвигаем} на 2 байта (\emph{ищем} следующий sync).
+    \item \textbf{Обработка}. \emph{Извлекаем} данные
+          (для \texttt{OSC\_DATA}~--- семплы).
+    \item \textbf{Сдвиг}. \emph{Убираем} обработанный кадр
+          из буфера.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Почему сдвиг на 2 байта при ошибке CRC?}
+Потому что \emph{sync}~--- это 2 байта. Мы \emph{не знаем},
+где \emph{следующий} sync. \emph{Сдвиг} на 2~---
+\emph{быстрее}, чем на 1, и \emph{не} пропустит sync.
+\end{keybox}
+
+\begin{ideabox}
+\textbf{Что такое <<конечный автомат>>?} \emph{Конечный
+автомат} (Finite State Machine, FSM)~--- это модель
+поведения, у которой есть \emph{конечный набор} состояний
+и \emph{правила} переходов между ними.
+
+\textbf{Пример}: светофор. Три состояния~--- красный,
+жёлтый, зелёный. Переход~--- по таймеру. \emph{Нельзя}
+быть <<полу-красным>>~--- либо одно, либо другое.
+
+\textbf{Наш парсер~--- тоже автомат.} У него \emph{пять}
+состояний:
+\begin{enumerate}
+    \item Поиск sync.
+    \item Чтение заголовка.
+    \item Ожидание полного кадра.
+    \item Проверка CRC.
+    \item Обработка кадра.
+\end{enumerate}
+Переходы~--- по событиям (пришёл байт, нашли sync,
+CRC не совпала).
+
+\textbf{Зачем это знать?} Если \emph{не} думать об
+автомате~--- код \emph{зацикливается}, \emph{теряет}
+состояние или \emph{падает}. Автомат \emph{дисциплинирует}:
+ты \emph{чётко} знаешь, \emph{где} ты и \emph{что} делать.
+\end{ideabox}
+
+\begin{warnbox}
+\textbf{Парсер~--- это \emph{конечный} автомат.} Если
+написать \emph{неправильно}~--- буфер \emph{переполнится}
+или \emph{зациклится}. \emph{Всегда} проверяйте \texttt{have}
+и \emph{не} забывайте \texttt{memmove}.
+\end{warnbox}
+
+\subsection{Особенности \texttt{OSC\_DATA}}
+
+Для кадра \texttt{OSC\_DATA} (\texttt{cmd = 0x40}) \emph{дополнительно}
+проверяем:
+\begin{itemize}
+    \item \texttt{len >= 9} (минимум: \texttt{fs\_hz} + \texttt{ch} +
+          \texttt{nsamples} + \texttt{pretrig}).
+    \item \texttt{nsamples <= 2048} (защита от \emph{мусора}).
+    \item \texttt{17 + nsamples * 2 <= 8 + len} (хватает ли
+          данных).
+\end{itemize}
+
+\section{Уроки главы}
+\label{sec:protocol-lessons}
+
+\begin{enumerate}
+    \item \textbf{Кадр~--- это контракт.} Формат
+          \emph{фиксирован} и \emph{документирован}.
+    \item \textbf{Sync~--- <<якорь>>.} Находит начало кадра
+          в потоке.
+    \item \textbf{Seq~--- защита от потерь и дубликатов.} Ответ
+          содержит \emph{тот же} \texttt{seq}.
+    \item \textbf{CRC16~--- контроль целостности.}
+          \emph{Ловит} случайные ошибки. Если CRC не совпала~--- кадр \emph{выбрасываем}.
+    \item \textbf{Частота в миллигерцах.} \emph{Нет}
+          дробных чисел~--- \emph{проще} передавать.
+    \item \textbf{Команды разделены по диапазонам:} генератор,
+          осциллограф, данные.
+    \item \textbf{OSC\_DATA~--- особый кадр.} \texttt{payload}~---
+          семплы \texttt{u16}.
+    \item \textbf{Отправка~--- \emph{один} write().}
+          \emph{Атомарно}.
+    \item \textbf{Приём~--- \emph{конечный} автомат.}
+          \emph{Сканируем} sync, \emph{проверяем} CRC, \emph{сдвигаем}.
+\end{enumerate}
+
+
+\section{Чек-лист грабель}
+\label{sec:protocol-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли протокола}
+\label{tab:protocol-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & Забыли sync & \texttt{0x55 0xAA} в начале \\
+2 & Неверный CRC & Считать от \texttt{ver} до \texttt{payload} \\
+3 & Буфер переполнен & Проверка \texttt{len > sizeof(buf) - 9} \\
+4 & Потеря seq & Инкремент \emph{каждого} кадра \\
+5 & Нет \texttt{memmove} после обработки & Сдвиг буфера \\
+6 & Бесконечный цикл парсера & Проверка \texttt{have} \\
+7 & Дробные числа & \emph{Миллигерцы} для частоты \\
+8 & Мусор в начале потока & \emph{Сканируем} до sync \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:protocol-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Вычислите вручную CRC16 для строки
+\texttt{"Hello"} (5 байт). Проверьте через функцию
+\texttt{crc16\_ibm()}.
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Нарисуйте \emph{диаграмму} кадра
+\texttt{set\_freq} (\texttt{cmd=0x11}, \texttt{payload=4} байта).
+Сколько байт всего? Где \texttt{crc}?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Что произойдёт, если в кадре
+\texttt{OSC\_DATA} \texttt{nsamples = 0}? Как парсер
+должен \emph{отреагировать}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Добавьте в протокол \emph{новую}
+команду \texttt{set\_filter} (\texttt{cmd=0x16}) с
+\texttt{payload} из \emph{двух} байт (коэффициенты).
+\emph{Опишите} формат.
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:protocol-check}
+
+\begin{enumerate}
+    \item Откройте \texttt{docs/protocol.md} в репозитории.
+    \item Сравните с тем, что написано в главе.
+    \item Найдите \emph{несоответствия} (если есть).
+    \item Соберите \emph{вручную} кадр \texttt{set\_wave(0)}~---
+          синус (\texttt{cmd=0x10}, \texttt{payload=[0]}).
+    \item Вычислите CRC \emph{вручную}.
+    \item Сравните с тем, что \emph{отправит} \texttt{send\_cmd()}.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли протокол.} Это
+\emph{главное}. Протокол~--- \emph{фундамент} общения.
+Без него~--- \emph{нет} осциллографа, \emph{нет} генератора.
+\end{ideabox}
+

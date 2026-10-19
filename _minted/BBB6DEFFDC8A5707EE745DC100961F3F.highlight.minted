@@ -1,0 +1,3 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+sudo\PYG{+w}{ }apt\PYG{+w}{ }install\PYG{+w}{ }gcc\PYGZhy{}arm\PYGZhy{}none\PYGZhy{}eabi\PYG{+w}{ }binutils\PYGZhy{}arm\PYGZhy{}none\PYGZhy{}eabi
+\end{MintedVerbatim}

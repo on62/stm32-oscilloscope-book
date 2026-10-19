@@ -1,0 +1,68 @@
+% ═══════════════════════════════════════════════════════════════
+%  main.tex — главный файл книги
+% ═══════════════════════════════════════════════════════════════
+\documentclass[11pt, a4paper, oneside]{book}
+
+\input{preamble}     % все пакеты и настройки
+\input{styles}       % пользовательские стили
+
+
+
+\begin{document}
+
+% ─── Титульная страница ───────────────────────────────────
+\frontmatter
+%\input{titlepage}
+%\input{preface}
+
+% ─── Оглавление ──────────────────────────────────────────
+\tableofcontents
+\listoffigures
+\listoftables
+%%%\lstlistoflistings — из listings (некрасивый).
+%%%\listoflistings — из minted (правильный).
+\listoflistings
+
+
+
+% ─── Основная часть ──────────────────────────────────────
+\mainmatter
+
+%\part{Введение в проект}
+\input{ch01-intro}
+\input{ch02-flashing}
+\input{ch03-architecture}
+\input{ch04-protocol}
+
+%\part{Работа с железом}
+%\input{ch03-serial-port}
+%\input{chapters/ch04-udev}
+%\input{chapters/ch05-reconnect}
+
+%\part{Логика приложения}
+%\input{chapters/ch06-callbacks}
+%\input{chapters/ch07-line-buffer}
+%\input{chapters/ch08-plot-data}
+%\input{chapters/ch09-config}
+%
+%\part{Интерфейс}
+%\input{chapters/ch10-gtk-basics}
+%\input{chapters/ch11-ui}
+%\input{chapters/ch12-cairo}
+%
+%\part{Завершение}
+%\input{chapters/ch13-lifecycle}
+%\input{chapters/ch14-debug}
+
+%% ─── Приложения ──────────────────────────────────────────
+%\appendix
+%\input{appendices/a-source}
+%\input{appendices/b-makefile}
+%\input{appendices/c-glossary}
+
+% ─── Предметный указатель ────────────────────────────────
+%\backmatter
+%\printindex
+
+
+\end{document}

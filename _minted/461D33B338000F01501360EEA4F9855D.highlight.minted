@@ -1,0 +1,24 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+\PYG{n+nv}{CC}\PYG{+w}{      }\PYG{o}{=}\PYG{+w}{ }arm\PYGZhy{}none\PYGZhy{}eabi\PYGZhy{}gcc
+\PYG{n+nv}{OBJCOPY}\PYG{+w}{ }\PYG{o}{=}\PYG{+w}{ }arm\PYGZhy{}none\PYGZhy{}eabi\PYGZhy{}objcopy
+\PYG{n+nv}{SIZE}\PYG{+w}{    }\PYG{o}{=}\PYG{+w}{ }arm\PYGZhy{}none\PYGZhy{}eabi\PYGZhy{}size
+\PYG{n+nv}{CFLAGS}\PYG{+w}{  }\PYG{o}{=}\PYG{+w}{ }\PYGZhy{}mcpu\PYG{o}{=}cortex\PYGZhy{}m4\PYG{+w}{ }\PYGZhy{}mthumb\PYG{+w}{ }\PYGZhy{}nostdlib\PYG{+w}{ }\PYGZhy{}ffreestanding\PYG{+w}{ }\PYG{l+s+se}{\PYGZbs{}}
+\PYG{+w}{          }\PYGZhy{}fno\PYGZhy{}builtin\PYG{+w}{ }\PYGZhy{}O2\PYG{+w}{ }\PYGZhy{}g3\PYG{+w}{ }\PYGZhy{}Wall\PYG{+w}{ }\PYGZhy{}Wextra
+
+\PYG{n+nf}{all}\PYG{o}{:}\PYG{+w}{ }\PYG{n}{blink}.\PYG{n}{bin}
+
+\PYG{n+nf}{blink.elf}\PYG{o}{:}\PYG{+w}{ }\PYG{n}{blink}.\PYG{n}{c} \PYG{n}{startup}.\PYG{n}{c} \PYG{n}{linker}.\PYG{n}{ld}
+\PYG{+w}{    }\PYG{k}{\PYGZdl{}(}CC\PYG{k}{)}\PYG{+w}{ }\PYG{k}{\PYGZdl{}(}CFLAGS\PYG{k}{)}\PYG{+w}{ }\PYGZhy{}T\PYG{+w}{ }linker.ld\PYG{+w}{ }\PYGZhy{}o\PYG{+w}{ }\PYG{n+nv}{\PYGZdl{}@}\PYG{+w}{ }blink.c\PYG{+w}{ }startup.c
+\PYG{+w}{    }\PYG{k}{\PYGZdl{}(}SIZE\PYG{k}{)}\PYG{+w}{ }\PYG{n+nv}{\PYGZdl{}@}
+
+\PYG{n+nf}{blink.bin}\PYG{o}{:}\PYG{+w}{ }\PYG{n}{blink}.\PYG{n}{elf}
+\PYG{+w}{    }\PYG{k}{\PYGZdl{}(}OBJCOPY\PYG{k}{)}\PYG{+w}{ }\PYGZhy{}O\PYG{+w}{ }binary\PYG{+w}{ }\PYGZdl{}\PYGZlt{}\PYG{+w}{ }\PYG{n+nv}{\PYGZdl{}@}
+
+\PYG{n+nf}{flash}\PYG{o}{:}\PYG{+w}{ }\PYG{n}{blink}.\PYG{n}{bin}
+\PYG{+w}{    }st\PYGZhy{}flash\PYG{+w}{ }write\PYG{+w}{ }blink.bin\PYG{+w}{ }0x08000000
+
+\PYG{n+nf}{clean}\PYG{o}{:}
+\PYG{+w}{    }rm\PYG{+w}{ }\PYGZhy{}f\PYG{+w}{ }blink.elf\PYG{+w}{ }blink.bin
+
+\PYG{n+nf}{.PHONY}\PYG{o}{:}\PYG{+w}{ }\PYG{n}{all} \PYG{n}{flash} \PYG{n}{clean}
+\end{MintedVerbatim}
