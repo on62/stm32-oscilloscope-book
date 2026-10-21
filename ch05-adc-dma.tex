@@ -1,0 +1,786 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch05-adc-dma.tex
+%  ADC + DMA: как захватить сигнал
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{ADC и DMA: как захватить сигнал}
+\label{ch:adc-dma}
+
+\epigraph{<<ADC~--- это переводчик с аналогового языка на цифровой.
+DMA~--- это курьер, который носит данные без участия CPU>>.}{}
+
+\section{Введение}
+\label{sec:adc-intro}
+
+В \texttt{ch04} мы разобрали \emph{протокол}~--- язык, на
+котором \emph{общаются} ПК и платы. Но \emph{что} именно
+передаёт осциллограф? \textbf{Сигнал}. А сигнал~---
+это \emph{напряжение}, которое \emph{меняется} во времени.
+
+\textbf{Задача} осциллографа~--- \emph{захватить} этот
+сигнал \emph{как можно точнее} и \emph{как можно быстрее}.
+Для этого нужны \emph{два} инструмента: \textbf{ADC}
+и \textbf{DMA}.
+
+\begin{ideabox}
+\textbf{Почему это \emph{сложно}?} Представьте, что вы
+пытаетесь \emph{сфотографировать} \emph{летящую} стрелу.
+Обычная камера \emph{размажет} её~--- слишком медленная
+выдержка. Нужна \emph{скоростная} камера~--- чтобы
+\emph{застыло} каждое мгновение. ADC~--- это \emph{скоростная}
+камера для \emph{электричества}.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Что такое ADC и зачем он нужен.
+    \item Как работает \emph{семплирование} (дискретизация).
+    \item Какие параметры важны: разрядность, частота, опора.
+    \item Что такое DMA и \emph{зачем} он нужен.
+    \item Как работает \emph{двойной буфер} (ping-pong).
+    \item Почему \emph{прерывания}~--- это ключ к \emph{непрерывному}
+          захвату.
+\end{itemize}
+
+\section{Что такое ADC}
+\label{sec:adc-what}
+
+\textbf{ADC} (Analog-to-Digital Converter, аналого-цифровой
+преобразователь)~--- это \emph{микросхема}, которая
+\emph{превращает} \emph{аналоговое} напряжение в
+\emph{цифровое} число.
+
+\begin{keybox}
+\textbf{Аналогия: переводчик.} Аналоговый сигнал~--- это
+\emph{плавная} кривая (как \emph{голос} человека).
+Цифровой~--- это \emph{набор} чисел (как \emph{текст}).
+ADC~--- это \emph{переводчик}, который \emph{слушает}
+голос и \emph{записывает} его \emph{словами}.
+\end{keybox}
+
+\subsection{Как работает ADC}
+
+\textbf{Представьте}, что у вас есть \emph{линейка} от
+\num{0} до \num{3.3} вольт. ADC \emph{измеряет} напряжение
+и \emph{округляет} его до \emph{ближайшего} деления.
+
+Если у ADC \textbf{12 бит}, то у него \textbf{4096}
+делений (от \num{0} до \num{4095}). Значит, каждое деление~---
+это:
+\[
+\frac{3.3 \text{ В}}{4096} \approx 0.8 \text{ мВ}
+\]
+То есть ADC \emph{различает} напряжение с точностью до
+\textbf{0.8 милливольта}.
+
+\begin{center}
+\begin{tabular}{|c|c|}
+\hline
+\textbf{Напряжение} & \textbf{Число (12 бит)} \\
+\hline
+\num{0.0} В & \num{0} \\
+\num{1.65} В & \num{2048} \\
+\num{3.3} В & \num{4095} \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{Семплирование (дискретизация)}
+
+ADC не \emph{непрерывен}. Он \emph{измеряет} напряжение
+\emph{через} \emph{равные} промежутки времени. Этот процесс
+называется \textbf{семплированием} (или \emph{дискретизацией}).
+
+\textbf{Пример}: если частота дискретизации~--- \SI{100}{\kilo\hertz}
+(\num{100000} семплов в секунду), то ADC \emph{измеряет}
+напряжение \emph{каждые} \SI{10}{\micro\second}.
+
+\begin{ideabox}
+\textbf{Аналогия: киносъёмка.} Фильм~--- это \emph{24}
+кадра в секунду. Наш глаз \emph{не} видит \emph{между}
+кадрами~--- мозг \emph{склеивает} их в \emph{плавное}
+движение. ADC работает так же: \emph{много} семплов
+в секунду~--- и \emph{кажется}, что сигнал \emph{непрерывен}.
+\end{ideabox}
+
+\subsection{Частота дискретизации и теорема Котельникова}
+
+\textbf{Ключевой вопрос}: \emph{как часто} надо семплировать,
+чтобы \emph{не потерять} сигнал?
+
+\textbf{Теорема Котельникова} (или Найквиста): частота
+дискретизации должна быть \emph{как минимум в два раза}
+выше \emph{максимальной} частоты сигнала.
+
+\begin{keybox}
+\textbf{Пример.} Если сигнал~--- \SI{1}{\kilo\hertz} (синус),
+то семплировать надо \emph{минимум} \SI{2}{\kilo\hertz}.
+Но \emph{на практике}~--- в \emph{10} раз чаще: \SI{10}{\kilo\hertz}.
+Иначе \emph{форма} сигнала будет \emph{искажена}.
+\end{keybox}
+
+\begin{warnbox}
+\textbf{Что такое <<алиасинг>>?} Если семплировать \emph{слишком}
+редко~--- быстрый сигнал \emph{превратится} в \emph{медленный}.
+Например, синус \SI{1}{\kilo\hertz} при семплировании
+\SI{1.5}{\kilo\hertz} \emph{выглядит} как \SI{500}{\hertz}.
+Это~--- \emph{обман}. Читатель \emph{думает}, что видит
+один сигнал, а на самом деле~--- \emph{другой}.
+\end{warnbox}
+
+\section{ADC на STM32F401}
+\label{sec:adc-stm32}
+
+Наш осциллограф~--- на \textbf{NUCLEO-F401RE}. Внутри~---
+\textbf{ADC} со следующими параметрами:
+
+\begin{itemize}
+    \item \textbf{Разрядность}: \SI{12}{\bit} (4096 уровней).
+    \item \textbf{Максимальная частота}: \SI{2.4}{\mega\sample/\second}
+      (\textbf{2.4 MSa/s}~--- мегасемплов в секунду).
+    \item \textbf{Опорное напряжение}: \SI{3.3}{\volt} (по умолчанию).
+    \item \textbf{Каналы}: \num{16} (разные пины).
+\end{itemize}
+
+\begin{notebox}
+\textbf{Что такое \texttt{Sa/s}?} \texttt{Sa/s} (samples per second)~---
+это \emph{семплов в секунду}. Единица измерения \emph{частоты
+дискретизации}. \textbf{Почему не Гц?} Потому что \emph{герц}~---
+это <<циклов в секунду>>. ADC \emph{не} делает циклы~---
+он делает \emph{измерения}. Чтобы не путать~--- используют
+\texttt{Sa/s}. Например, \texttt{100 kSa/s}~--- это
+\emph{100000} семплов в секунду.
+\end{notebox}
+
+\begin{keybox}
+\textbf{Почему \SI{12}{\bit}, а не \SI{16}{\bit}?} \SI{12}{\bit}~---
+это \emph{стандарт} для STM32. \SI{16}{\bit}~--- \emph{дороже}
+и \emph{медленнее}. Для \emph{учебного} осциллографа
+\SI{12}{\bit}~--- \emph{достаточно}.
+\end{keybox}
+
+\subsection{Пины и каналы}
+
+На Nucleo-F401RE \emph{аналоговые} входы~--- это пины
+\texttt{PA0}--\texttt{PA7}, \texttt{PB0}--\texttt{PB1},
+\texttt{PC0}--\texttt{PC5}.
+
+\textbf{Мы используем} \texttt{PA0}~--- это \textbf{ADC1\_IN0}.
+К нему \emph{подключим} генератор (или другой источник
+сигнала).
+
+\subsection{Опорное напряжение}
+
+ADC \emph{сравнивает} входное напряжение с \textbf{опорным}
+(\texttt{VREF+}). На Nucleo-F401RE \texttt{VREF+}~---
+это \SI{3.3}{\volt}.
+
+\textbf{Что это значит}: если подать \SI{3.3}{\volt}~---
+ADC вернёт \num{4095}. Если \SI{0}{\volt}~--- \num{0}.
+Если \SI{1.65}{\volt}~--- \num{2048}.
+
+\begin{warnbox}
+\textbf{Не подавайте больше \SI{3.3}{\volt}!} ADC \emph{сгорит}
+(или \emph{повредится}). Если сигнал \emph{больше}~---
+нужен \emph{делитель} напряжения.
+\end{warnbox}
+
+\section{Зачем нужен DMA}
+\label{sec:dma-why}
+
+\textbf{Представьте}: ADC \emph{семплирует} сигнал с
+частотой \SI{100}{\kilo\hertz}. Каждый семпл~--- это
+\emph{число} (\SI{12}{\bit}). \emph{Кто-то} должен
+\emph{забрать} это число \emph{из} регистра ADC и
+\emph{положить} в \emph{память} (SRAM).
+
+\subsection{Плохой вариант: CPU}
+
+\textbf{CPU} мог бы \emph{читать} регистр ADC \emph{каждый}
+раз, когда готов \emph{новый} семпл. Но:
+
+\begin{itemize}
+    \item \textbf{CPU занят}~--- не может делать \emph{ничего}
+          другого.
+    \item \textbf{Прерывания}~--- \num{100000} прерываний
+          в секунду. \emph{Много}.
+    \item \textbf{Потери}~--- если CPU \emph{опоздал},
+          семпл \emph{потерян}.
+\end{itemize}
+
+\begin{warnbox}
+\textbf{Аналогия: курьер и директор.} Директор (CPU)
+\emph{сам} бегает \emph{за} каждой \emph{посылкой}~---
+это \emph{глупо}. Директор \emph{должен} \emph{думать},
+а \emph{не} \emph{носить} коробки.
+\end{warnbox}
+
+\subsection{Хороший вариант: DMA}
+
+\textbf{DMA} (Direct Memory Access)~--- это \emph{отдельный}
+контроллер, который \emph{умеет} \emph{перекладывать}
+данные \emph{из} периферии \emph{в} память \emph{без}
+участия CPU.
+
+\textbf{Как это работает}:
+\begin{enumerate}
+    \item CPU \emph{настраивает} DMA: <<когда ADC
+          \emph{готов}~--- \emph{забери} число и \emph{положи}
+          в \emph{этот} адрес>>.
+    \item CPU \emph{забывает} про ADC. \emph{Занимается}
+          другими делами.
+    \item ADC \emph{семплирует}. Когда готов~--- \emph{сообщает}
+          DMA.
+    \item DMA \emph{забирает} число и \emph{кладёт} в память.
+    \item CPU \emph{даже не знает}, что это произошло.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{DMA~--- это <<курьер>>.} Он \emph{носит} данные
+\emph{без} участия CPU. CPU \emph{только} \emph{настраивает}
+его~--- \emph{один} раз. Дальше~--- \emph{всё} \emph{само}.
+\end{keybox}
+
+\subsection{Почему DMA критичен для осциллографа}
+
+\textbf{Без DMA} CPU \emph{не успевает} обрабатывать
+\SI{100}{\kilo\sample/\second}. Он \emph{тратит} всё
+время на \emph{чтение} ADC.
+
+\textbf{С DMA} CPU \emph{свободен}~--- он \emph{занимается}
+USB, \emph{отправкой} данных, \emph{обработкой} команд.
+\emph{Только} DMA \emph{работает} с ADC.
+
+\section{Двойной буфер (ping-pong)}
+\label{sec:dma-pingpong}
+
+\textbf{Проблема}: DMA \emph{пишет} в память. CPU \emph{читает}
+из памяти. Что если CPU \emph{читает} \emph{ту} ячейку,
+в \emph{которую} DMA \emph{сейчас} \emph{пишет}?
+
+\textbf{Решение}: \textbf{двойной буфер} (ping-pong). Память
+\emph{делится} на \emph{две} половины. DMA \emph{пишет}
+в \emph{одну}, CPU \emph{читает} из \emph{другой}. \emph{Потом}
+они \emph{меняются} местами.
+
+
+
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    buffer/.style={
+        draw, thick,
+        minimum width=4cm,
+        minimum height=1cm,
+        align=center,
+        font=\small\ttfamily,
+        fill=white
+    },
+    active/.style={buffer, fill=clrHWData!30},
+    free/.style={buffer, fill=clrLogicData!20},
+    label/.style={
+        font=\footnotesize,
+        above,
+        inner sep=2pt
+    },
+    phase/.style={
+        font=\small\bfseries,
+        fill=white,
+        inner sep=3pt
+    }
+]
+
+% ─── Координатная сетка ────────────────────────────
+\draw[step=1cm, gray!20, very thin] (-3, -3) grid (10, 3);
+
+% ─── Фаза 1 ───────────────────────────────────────
+\node[phase] at (0, 2) {Фаза 1};
+\node[active] (buf1) at (1, 1) {Буфер 1 [DMA пишет]};
+\node[free]   (buf2) at (6, 1) {Буфер 2 [CPU читает]};
+
+% Стрелки
+\draw[-{Latex[length=3mm]}, very thick, color=clrFlowData]
+    (-2, 1) -- (buf1.west);
+\node[font=\footnotesize, left] at (-2.1, 1) {ADC};
+
+\draw[-{Latex[length=3mm]}, very thick, color=clrFlowCmd]
+    (buf2.east) -- (9, 1);
+\node[font=\footnotesize, right] at (9.0, 1) {USB};
+
+% ─── Разделитель ──────────────────────────────────
+\draw[dashed, gray!90] (-3, 0) -- (10, 0);
+
+% ─── Фаза 2 ───────────────────────────────────────
+\node[phase] at (0, -0.5) {Фаза 2};
+\node[free]   (buf3) at (1, -1.5) {Буфер 1 [CPU читает]};
+\node[active] (buf4) at (7.5, -1.5) {Буфер 2 [DMA пишет]};
+
+% Стрелки
+\draw[-{Latex[length=3mm]}, very thick, color=clrFlowData]
+    (4.5, -1.5) -- (buf4.west);
+\node[font=\footnotesize, above] at (4, -1.7) {ADC};
+
+\draw[-{Latex[length=3mm]}, very thick, color=clrFlowCmd]
+    (buf3.west) -- (-2, -1.5);
+\node[font=\footnotesize, left] at (-2.2, -1.5) {USB};
+
+% ─── Метки осей (для отладки) ─────────────────────
+\foreach \x in {-3,-2,-1,0,1,2,3,4,5,6,7,8,9,10} {
+    \node[font=\tiny, gray] at (\x, -3.3) {\x};
+}
+\foreach \y in {-3,-2,-1,0,1,2,3} {
+    \node[font=\tiny, gray] at (-3.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Двойной буфер (ping-pong). В фазе 1 DMA пишет
+в буфер 1, CPU читает из буфера 2. В фазе 2 они меняются
+местами.}
+\label{fig:dma-pingpong}
+\end{figure}
+
+
+
+\textbf{Как это работает}:
+\begin{enumerate}
+    \item \textbf{Фаза 1}: DMA \emph{пишет} в \emph{первую}
+          половину. CPU \emph{читает} из \emph{второй}.
+    \item \textbf{Фаза 1 закончена}: DMA \emph{заполнил}
+          первую половину. Срабатывает \emph{прерывание}
+          (\texttt{half-cplt}).
+    \item \textbf{Фаза 2}: DMA \emph{пишет} во \emph{вторую}
+          половину. CPU \emph{читает} из \emph{первой}.
+    \item \textbf{Фаза 2 закончена}: DMA \emph{заполнил}
+          вторую половину. Срабатывает \emph{прерывание}
+          (\texttt{cplt}).
+    \item \textbf{Повтор} с шага 1.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Почему это работает?} DMA \emph{никогда} не
+пишет в ту половину, которую CPU \emph{сейчас} читает.
+Они \emph{всегда} в \emph{разных} половинах. \emph{Потери}
+данных~--- \emph{нет}.
+\end{keybox}
+
+\begin{warnbox}
+\textbf{Что если CPU \emph{опоздал}?} DMA \emph{уже}
+заполнил \emph{свою} половину и \emph{переключился}
+на \emph{ту}, которую CPU \emph{читает}. \emph{Данные}
+\emph{потеряны}. \emph{Поэтому} CPU \emph{обязан}
+обработать половину \emph{быстро}~--- за \emph{время}
+заполнения \emph{одной} половины.
+\end{warnbox}
+
+
+
+
+%%%%%%=====================
+
+
+
+\section{Прерывания: сигнал <<готово>>}
+\label{sec:adc-interrupts}
+
+В \texttt{sec:dma-pingpong} мы увидели \emph{двойной}
+буфер. Но \emph{как} CPU \emph{узнаёт}, что \emph{половина}
+заполнена? Через \textbf{прерывания}.
+
+\subsection{Что такое прерывание}
+
+\textbf{Прерывание} (interrupt)~--- это \emph{сигнал}
+от \emph{периферии} к \emph{процессору}: <<\emph{остановись},
+у меня \emph{важное} дело>>.
+
+\begin{ideabox}
+\textbf{Аналогия: звонок в дверь.} Вы \emph{работаете}
+(CPU). Вдруг~--- \emph{звонок} (прерывание). Вы
+\emph{открываете} дверь, \emph{принимаете} посылку
+(обработчик), \emph{возвращаетесь} к работе. \emph{Работа}
+\emph{не} потеряна~--- она \emph{продолжается} с того
+же места.
+\end{ideabox}
+
+\textbf{Как это работает}:
+\begin{enumerate}
+    \item \textbf{Периферия} (DMA) \emph{выставляет} флаг
+          <<я готов>>.
+    \item \textbf{Контроллер} \emph{прерываний} (NVIC)
+          \emph{видит} флаг и \emph{сообщает} CPU.
+    \item \textbf{CPU} \emph{сохраняет} текущее состояние
+          (регистры) в \emph{стек}.
+    \item \textbf{CPU} \emph{переходит} в \emph{обработчик}
+          прерывания (ISR~--- Interrupt Service Routine).
+    \item \textbf{Обработчик} \emph{делает} своё дело
+          и \emph{возвращает} управление.
+    \item \textbf{CPU} \emph{восстанавливает} состояние
+          из стека и \emph{продолжает} работу.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Прерывание~--- это \emph{асинхронность}.} CPU
+\emph{не} ждёт~--- он \emph{занимается} своими делами.
+Когда \emph{периферия} готова~--- она \emph{сообщает}.
+CPU \emph{реагирует} \emph{мгновенно}.
+\end{keybox}
+
+\subsection{Два прерывания DMA: half-cplt и cplt}
+
+\textbf{DMA} \emph{генерирует} \emph{два} прерывания на
+\emph{цикл} двойного буфера:
+
+\begin{itemize}
+    \item \texttt{HAL\_ADC\_ConvHalfCpltCallback()}~---
+          \emph{первая} половина заполнена.
+    \item \texttt{HAL\_ADC\_ConvCpltCallback()}~---
+          \emph{вторая} половина заполнена.
+\end{itemize}
+
+\textbf{Схема}:
+\begin{enumerate}
+    \item DMA \emph{пишет} в буфер 1. CPU \emph{читает}
+          буфер 2.
+    \item DMA \emph{заполнил} буфер 1~--- \emph{прерывание}
+          \texttt{half-cplt}. CPU \emph{переключается}:
+          \emph{начинает} читать буфер 1.
+    \item DMA \emph{пишет} в буфер 2. CPU \emph{читает}
+          буфер 1.
+    \item DMA \emph{заполнил} буфер 2~--- \emph{прерывание}
+          \texttt{cplt}. CPU \emph{переключается}:
+          \emph{начинает} читать буфер 2.
+    \item Повтор с шага 1.
+\end{enumerate}
+
+\begin{warnbox}
+\textbf{Обработчик прерывания должен быть \emph{быстрым}.}
+Пока CPU \emph{в} обработчике~--- он \emph{не} делает
+\emph{других} дел. Если обработчик \emph{медленный}~---
+\emph{пропускаются} другие прерывания. \textbf{Правило}:
+обработчик~--- \emph{минимум} работы. \emph{Тяжёлое}~---
+в \emph{основной} цикл.
+\end{warnbox}
+
+\section{Кольцо кадров}
+\label{sec:adc-ring}
+
+\textbf{Прерывание} даёт \emph{сигнал}: <<половина готова>>.
+Но \emph{что} делать с \emph{данными}? Их надо \emph{собрать}
+в \emph{кадр} для \emph{отправки} на ПК.
+
+\textbf{Кольцо кадров}~--- это \emph{буфер} \emph{кадров}.
+Пока DMA \emph{пишет} в \emph{один} кадр~--- CPU \emph{отправляет}
+\emph{другой}.
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    box/.style={
+        draw, thick, rounded corners=1mm,
+        minimum width=2cm, minimum height=1cm,
+        align=center, font=\footnotesize\ttfamily,
+        fill=white
+    },
+    wr/.style={box, fill=clrHWData!30},
+    rd/.style={box, fill=clrUIData!20},
+    fre/.style={box, fill=gray!10},
+    arr/.style={-{Latex[length=3mm]}, very thick}
+]
+
+% Кольцо из 4 кадров
+\node[wr]  (f0) at (0, 0) {Кадр 0\\[2pt]\textbf{DMA}};
+\node[fre] (f1) at (3, 0) {Кадр 1\\[2pt]пусто};
+\node[fre] (f2) at (6, 0) {Кадр 2\\[2pt]пусто};
+\node[rd]  (f3) at (9, 0) {Кадр 3\\[2pt]\textbf{USB}};
+
+% Стрелки (по кругу)
+\draw[arr] (f0.east) -- (f1.west);
+\draw[arr] (f1.east) -- (f2.west);
+\draw[arr] (f2.east) -- (f3.west);
+\draw[arr, dashed] (f3.south) to[bend left=40] (f0.south);
+
+% Подписи
+\node[font=\footnotesize, above=0.3cm of f0] {пишется};
+\node[font=\footnotesize, above=0.3cm of f3] {отправляется};
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Кольцо кадров. DMA пишет в текущий кадр,
+USB отправляет уже готовый. Когда DMA заканчивает~---
+переходит к следующему.}
+\label{fig:adc-ring}
+\end{figure}
+
+\textbf{Как это работает}:
+\begin{enumerate}
+    \item DMA \emph{заполняет} кадр 0.
+    \item Когда кадр 0 \emph{готов}~--- DMA \emph{переходит}
+          к кадру 1. \emph{Кадр 0} становится \emph{доступен}
+          для \emph{отправки}.
+    \item USB \emph{отправляет} кадр 0.
+    \item DMA \emph{заполняет} кадр 1. USB \emph{отправляет}
+          кадр 1 (когда \emph{готов}).
+    \item \emph{Повтор} по кругу.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Почему кольцо?} Потому что \emph{непрерывно}.
+DMA \emph{никогда} не \emph{останавливается}. Он
+\emph{пишет} в \emph{следующий} кадр. Пока USB
+\emph{отправляет} \emph{предыдущий}.
+\end{keybox}
+
+\begin{warnbox}
+\textbf{Что если USB \emph{опоздал}?} DMA \emph{обогнал}
+USB \emph{на круг}~--- и \emph{пишет} в тот кадр,
+который USB \emph{ещё} \emph{отправляет}. \emph{Данные}
+\emph{испорчены}. \textbf{Решение}: \emph{увеличить}
+размер кольца или \emph{ускорить} USB.
+\end{warnbox}
+
+\section{Код: adc.c и dma.c}
+\label{sec:adc-code}
+
+\textbf{Теперь}~--- \emph{код}. Он \emph{короткий}, но
+\emph{плотный}. \emph{Каждая} строка \emph{важна}.
+
+\subsection{Настройка ADC}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void adc_init(void)
+{
+    // 1. Тактирование ADC1
+    RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
+
+    // 2. Настройка ADC1
+    ADC1->CR1 = 0;                  // 12-bit, no scan
+    ADC1->CR2 = ADC_CR2_ADON;       // включить ADC
+    ADC1->SQR1 = 0;                 // 1 преобразование
+    ADC1->SQR3 = 0;                 // канал 0 (PA0)
+
+    // 3. Время семплирования
+    ADC1->SMPR2 = (7 << 0);         // 480 циклов
+
+    // 4. Калибровка
+    ADC1->CR2 |= ADC_CR2_RSTCAL;
+    while (ADC1->CR2 & ADC_CR2_RSTCAL);
+    ADC1->CR2 |= ADC_CR2_CAL;
+    while (ADC1->CR2 & ADC_CR2_CAL);
+
+    // 5. Включить ADC
+    ADC1->CR2 |= ADC_CR2_ADON;
+}
+\end{minted}
+\caption{\texttt{adc\_init()}~--- настройка ADC1}
+\label{lst:adc-init}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{RCC->APB2ENR}~--- \emph{включает} тактирование
+          ADC. \emph{Без этого} ADC \emph{не работает}.
+    \item \texttt{ADC1->CR1 = 0}~--- \SI{12}{\bit}, без
+          \emph{сканирования} (один канал).
+    \item \texttt{ADC1->SQR3 = 0}~--- канал \texttt{0}
+          (\texttt{PA0}).
+    \item \texttt{ADC1->SMPR2 = (7 << 0)}~--- \emph{время}
+          семплирования. \texttt{7}~--- \emph{максимум} (\num{480}
+          циклов). \emph{Точнее}, но \emph{медленнее}.
+    \item \textbf{Калибровка}~--- \emph{обязательна} перед
+          \emph{первым} запуском.
+\end{itemize}
+
+\subsection{Настройка DMA}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void dma_init(uint16_t *buf, size_t len)
+{
+    // 1. Тактирование DMA2
+    RCC->AHB1ENR |= RCC_AHB1ENR_DMA2EN;
+
+    // 2. Поток 0, канал 0 (ADC1)
+    DMA2_Stream0->CR = 0;
+    DMA2_Stream0->PAR = (uint32_t)&ADC1->DR;
+    DMA2_Stream0->M0AR = (uint32_t)buf;
+    DMA2_Stream0->NDTR = len;
+
+    // 3. Настройки
+    DMA2_Stream0->CR =
+        (0 << 25)  |   // канал 0
+        (1 << 13)  |   // memory increment
+        (1 << 11)  |   // 16-bit peripheral
+        (1 << 10)  |   // 16-bit memory
+        (1 << 8)   |   // circular mode
+        (1 << 4);      // half-transfer interrupt
+
+    // 4. Включить
+    DMA2_Stream0->CR |= DMA_SxCR_EN;
+    ADC1->CR2 |= ADC_CR2_DMA;
+}
+\end{minted}
+\caption{\texttt{dma\_init()}~--- настройка DMA}
+\label{lst:dma-init}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{PAR}~--- \emph{адрес} периферии
+          (\texttt{ADC1->DR}~--- \emph{регистр} данных).
+    \item \texttt{M0AR}~--- \emph{адрес} памяти (буфер).
+    \item \texttt{NDTR}~--- \emph{сколько} передать.
+    \item \texttt{(1 << 8)}~--- \emph{циклический} режим.
+          Когда \emph{всё} передано~--- \emph{начинает}
+          заново.
+    \item \texttt{(1 << 4)}~--- \emph{прерывание} на
+          \emph{половине} (\texttt{half-cplt}).
+\end{itemize}
+
+\subsection{Обработчики прерываний}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    // Первая половина готова
+    push_block(&dma_buf[0], OSC_DMA_POINTS);
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    // Вторая половина готова
+    push_block(&dma_buf[OSC_DMA_POINTS], OSC_DMA_POINTS);
+}
+\end{minted}
+\caption{Обработчики прерываний DMA}
+\label{lst:dma-irq}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{HAL\_ADC\_ConvHalfCpltCallback}~--- \emph{первая}
+          половина \texttt{dma\_buf} готова.
+    \item \texttt{HAL\_ADC\_ConvCpltCallback}~--- \emph{вторая}
+          половина.
+    \item \texttt{push\_block()}~--- \emph{копирует}
+          данные в \emph{кольцо} кадров.
+\end{itemize}
+
+\begin{warnbox}
+\textbf{Обработчик должен быть \emph{коротким}.} В
+\emph{идеале}~--- только \texttt{memcpy()}. \emph{Всё}
+остальное~--- в \emph{основной} цикл. \emph{Почему}?
+Пока CPU \emph{в} обработчике~--- он \emph{не} делает
+\emph{других} дел. \emph{Долгий} обработчик~---
+\emph{пропуск} других прерываний.
+\end{warnbox}
+
+\section{Уроки главы}
+\label{sec:adc-lessons}
+
+\begin{enumerate}
+    \item \textbf{ADC~--- это переводчик.} Он \emph{превращает}
+          напряжение в \emph{число}.
+    \item \textbf{12 бит~--- 4096 уровней.} Точность~---
+          \SI{0.8}{\milli\volt}.
+    \item \textbf{Семплирование~--- это <<фотографирование>>}
+          сигнала \emph{через} \emph{равные} промежутки.
+    \item \textbf{Теорема Котельникова:} частота семплирования
+          \emph{минимум} \emph{вдвое} выше \emph{максимальной}
+          частоты сигнала.
+    \item \textbf{DMA~--- это курьер.} \emph{Носит} данные
+          \emph{без} участия CPU.
+    \item \textbf{Ping-pong~--- это двойной буфер.} Пока DMA
+          \emph{пишет} в \emph{одну} половину~--- CPU \emph{читает} из \emph{другой}. Ping-pong \emph{не} теряет данные.
+    \item \textbf{Прерывания~--- \emph{сигнал}, что половина
+      \emph{готова}.} \emph{Быстрые}
+          обработчики~--- \emph{залог} скорости.
+    \item \textbf{Кольцо кадров~--- непрерывность.} DMA
+          \emph{пишет}, USB \emph{отправляет}.
+    \item \textbf{Код~--- плотный.} \emph{Каждая} строка
+          \emph{важна}.
+\end{enumerate}
+
+
+\section{Чек-лист грабель}
+\label{sec:adc-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли ADC и DMA}
+\label{tab:adc-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & ADC не работает & Включить \texttt{RCC\_APB2ENR\_ADC1EN} \\
+2 & DMA не работает & Включить \texttt{RCC\_AHB1ENR\_DMA2EN} \\
+3 & Неправильный канал & \texttt{ADC1->SQR3 = 0} для \texttt{PA0} \\
+4 & Нет калибровки & \texttt{ADC\_CR2\_CAL} \\
+5 & Медленное семплирование & \texttt{SMPR2 = 7} (\num{480} циклов) \\
+6 & Потеря данных & Ping-pong + кольцо кадров \\
+7 & Долгий обработчик & Только \texttt{memcpy()}, \emph{больше} ничего \\
+8 & Ошибка в \texttt{NDTR} & \texttt{len} = размер \emph{одной} половины \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:adc-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Что произойдёт, если \emph{не}
+включить \texttt{RCC\_APB2ENR\_ADC1EN}? Почему?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Нарисуйте \emph{диаграмму} кольца
+кадров для \emph{четырёх} кадров. Что произойдёт, если
+USB \emph{отстаёт} на \emph{два} кадра?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Сколько времени занимает \emph{одно}
+преобразование ADC при \texttt{SMPR2 = 7} (\num{480} циклов)
+и \emph{частоте} ADC \SI{84}{\mega\hertz}? (\emph{Подсказка}:
+время = \texttt{480 / 84e6}.)
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Предложите способ \emph{ускорить}
+обработчик \texttt{push\_block()}, если данных \emph{много}.
+Как \emph{избежать} \texttt{memcpy()}?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:adc-check}
+
+\begin{enumerate}
+    \item Подключите Nucleo к компьютеру.
+    \item Соберите прошивку (см. главу 2).
+    \item Подключите генератор к \texttt{PA0} (\SI{1}{\kilo\hertz},
+          \SI{1}{\volt}pp).
+    \item Запустите OpenOCD + GDB.
+    \item Поставьте точку останова в \texttt{HAL\_ADC\_ConvHalfCpltCallback}.
+    \item Посмотрите, \emph{как} заполняется буфер.
+    \item Сделайте \emph{скриншот} — \emph{пришлите} в книгу.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли ADC и DMA.} Это
+\emph{главное}. Без них \emph{нет} осциллографа. \emph{Есть}
+только \emph{железо}. Дальше~--- \emph{триггер},
+\emph{кольцо}, \emph{USB}. \emph{Всё} \emph{впереди}.
+\end{ideabox}
+
+
+
