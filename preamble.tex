@@ -41,6 +41,13 @@
 % Математика
 \usepackage{amsmath, amssymb, amsfonts}
 
+% ─── Красивые подписи рисунков и таблиц ──────────
+\usepackage{caption}
+\captionsetup{
+    labelsep=period,  % Точка после номера
+    font=small        % Чуть мельче
+}
+
 % ═══════════════════════════════════════════════════════════════
 %  ПОЛЕЗНЫЕ ПАКЕТЫ
 % ═══════════════════════════════════════════════════════════════
@@ -159,5 +166,39 @@
 \DeclareSIUnit{\baud}{Bd}        % бод
 \DeclareSIUnit{\sps}{sps}        % samples per second (альтернатива)
 
+% ═══════════════════════════════════════════════════════════════
+%  ОФОРМЛЕНИЕ ПОДПИСЕЙ (точка вместо двоеточия, двойная нумерация)
+% ═══════════════════════════════════════════════════════════════
 
+%\AtBeginDocument
+%{
+% эти команды выполнятся после 
+% начала документа, когда всё готово.
+%}
+
+% ─── Рисунки и таблицы: точка вместо двоеточия ─────
+\AtBeginDocument{%
+    \renewcommand{\figurename}{Рис.}
+    \renewcommand{\thefigure}{\thechapter.\arabic{figure}}
+
+    \renewcommand{\tablename}{Таблица}
+    \renewcommand{\thetable}{\thechapter.\arabic{table}}
+}
+
+% ─── Листинги: "Листинг 1.1." + нумерация по главе ─
+\renewcommand{\listingscaption}{Листинг}
+\AtBeginDocument{%
+    \renewcommand{\thelisting}{\thechapter.\arabic{listing}}%
+    \renewcommand{\fnum@listing}{\listingscaption~\thelisting.}%
+}
+
+% ─── cleveref: "рис. 1.1", "табл. 1.1", "лист. 1.1" ─
+\crefname{figure}{рис.}{рис.}
+\Crefname{figure}{Рис.}{Рис.}
+\crefname{table}{табл.}{табл.}
+\Crefname{table}{Табл.}{Табл.}
+\crefname{listing}{лист.}{лист.}
+\Crefname{listing}{Лист.}{Лист.}
+
+\endinput
 
