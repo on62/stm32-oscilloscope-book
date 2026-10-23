@@ -1,0 +1,552 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch06-trigger.tex
+%  Триггер: как поймать начало сигнала
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Триггер: как поймать начало сигнала}
+\label{ch:trigger}
+
+\epigraph{<<Без триггера осциллограф~--- это просто телевизор
+со сломанной синхронизацией. Картинка есть, но она
+бесконечно бежит по экрану>>.}{}
+
+\section{Введение}
+\label{sec:trigger-intro}
+
+В \texttt{ch05} мы научились \emph{захватывать} сигнал с
+помощью ADC и DMA. Мы получаем \emph{числа}~--- тысячи
+чисел в секунду. Но \emph{как} их \emph{показать}
+на экране?
+
+\textbf{Проблема}: если просто \emph{рисовать} всё, что
+пришло~--- картинка \emph{поплывёт}. Каждый \emph{новый}
+кадр будет начинаться \emph{в} \emph{случайном} месте.
+Синус будет \emph{дёргаться} влево-вправо.
+
+\begin{ideabox}
+\textbf{Аналогия: старый телевизор.} Помните, когда
+антенна \emph{плохо} ловила~--- картинка \emph{бежала}
+по экрану \emph{сверху} вниз или \emph{слева} направо.
+Это~--- \emph{отсутствие} синхронизации. Триггер~---
+это \emph{синхронизация} для осциллографа.
+\end{ideabox}
+
+\textbf{Триггер} (trigger)~--- это \emph{условие}, при
+котором осциллограф \emph{начинает} запись. Он говорит:
+<<\emph{начинай} захват, \emph{когда} сигнал \emph{пересечёт}
+\emph{вот} \emph{этот} уровень \emph{вот} \emph{в} этом
+направлении>>.
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Что такое \emph{уровень} (level) триггера.
+    \item Что такое \emph{фронт} (edge)~--- по возрастанию
+          или по убыванию.
+    \item Какие бывают \emph{режимы} триггера.
+    \item Что такое \emph{предтриггер} (pre-trigger) и зачем он нужен.
+    \item Как \emph{реализовать} триггер на STM32.
+\end{itemize}
+
+\section{Что такое триггер}
+\label{sec:trigger-what}
+
+\textbf{Триггер}~--- это \emph{событие}, которое
+\emph{запускает} запись. \emph{Пока} событие \emph{не}
+произошло~--- осциллограф \emph{ждёт}. \emph{Когда}
+произошло~--- \emph{захватывает} кадр и \emph{показывает}.
+
+\subsection{Уровень триггера}
+
+\textbf{Уровень} (level)~--- это \emph{напряжение}, при
+котором \emph{срабатывает} триггер.
+
+\textbf{Пример}: уровень \SI{1.5}{\volt}. Осциллограф
+\emph{ждёт}, пока сигнал \emph{не} \emph{пересечёт}
+\SI{1.5}{\volt}. Как только \emph{пересечёт}~--- \emph{начинает}
+запись.
+
+\begin{keybox}
+\textbf{Зачем нужен уровень?} Чтобы \emph{всегда}
+начинать \emph{с} \emph{одного} и \emph{того} же
+места сигнала. Если сигнал~--- \emph{синус}, и мы
+\emph{ждём} \SI{0}{\volt}~--- кадр \emph{начнётся}
+с \emph{нуля}. \emph{Каждый} раз. \emph{Картинка}~---
+\emph{стабильна}.
+\end{keybox}
+
+\subsection{Фронт триггера}
+
+\textbf{Фронт} (edge)~--- это \emph{направление}
+пересечения уровня:
+\begin{itemize}
+    \item \textbf{По возрастанию} (rising)~--- сигнал
+          \emph{растёт} и \emph{пересекает} уровень \emph{снизу} вверх.
+    \item \textbf{По убыванию} (falling)~--- сигнал
+          \emph{падает} и \emph{пересекает} уровень \emph{сверху} вниз.
+\end{itemize}
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    axis/.style={-{Latex[length=3mm]}, thick},
+    signal/.style={very thick, color=clrLogicData},
+    level/.style={thick, dashed, color=clrWarn},
+    marker/.style={circle, fill=clrWarn, inner sep=2pt},
+    label/.style={font=\footnotesize, inner sep=2pt}]
+% ─── Координатная сетка ────────────────────────────
+\draw[step=1cm, gray!20, very thin] (-0.5, -2) grid (10, 4);
+% Оси
+\draw[axis] (-0.5, 0) -- (9.5, 0) node[right] {\(t\)};
+\draw[axis] (0, -1.5) -- (0, 3.5) node[above] {\(U\)};
+% Уровень триггера
+\draw[level] (-0.5, 1.5) -- (9.5, 1.5);
+\node[label, right] at (9.5, 1.5) {уровень};
+% Сигнал (синус с шумом и смещением)
+\draw[signal, domain=0:9, samples=200]
+    plot (\x, {1.5 + 1.2 * sin(deg(1.5 * \x))});
+% Точки срабатывания триггера (по возрастанию)
+\node[marker] at (1.05, 1.5) {};
+\node[marker] at (5.23, 1.5) {};
+\node[marker] at (9.41, 1.5) {};
+% Подписи
+\node[label, above] at (1.05, 1.7) {rising};
+\node[label, above] at (5.23, 1.7) {rising};
+\node[label, above] at (9.41, 1.7) {rising};
+% Метки осей (для отладки)
+\foreach \x in {0,...,9} {
+    \node[font=\tiny, gray] at (\x, -2.3) {\x};}
+\foreach \y in {-2,-1,0,1,2,3} {
+    \node[font=\tiny, gray] at (-0.7, \y) {\y};}
+\end{tikzpicture}
+}% end adjustbox
+\caption{Уровень триггера и точки срабатывания.
+Красная пунктирная линия~--- уровень. Кружки~--- моменты,
+когда сигнал \emph{пересекает} уровень \emph{по возрастанию}.}
+\label{fig:trigger-level}
+\end{figure}
+
+\begin{warnbox}
+\textbf{Почему именно \emph{точка} пересечения, а не \emph{весь}
+сигнал?} Осциллограф \emph{не} может \emph{захватить}
+\emph{всё}~--- слишком \emph{много} данных. Он \emph{захватывает}
+\emph{окно} (например, \num{1024} семпла) \emph{вокруг}
+точки \emph{пересечения}. Триггер \emph{говорит}, \emph{где}
+начать окно.
+\end{warnbox}
+
+\section{Режимы триггера}
+\label{sec:trigger-modes}
+
+\textbf{Триггер} может работать в \emph{трёх} режимах:
+
+\begin{itemize}
+    \item \texttt{off}~--- \emph{выключен}. Осциллограф
+          \emph{захватывает} всё подряд. \emph{Картинка}
+          \emph{плывёт}.
+    \item \texttt{normal}~--- \emph{ждёт} \emph{события}.
+          Если \emph{событие} не произошло~--- \emph{ничего}
+          не показывает. \emph{Картинка} \emph{стабильна},
+          но \emph{если} сигнал \emph{пропал}~--- \emph{пусто}.
+    \item \texttt{auto}~--- \emph{ждёт} \emph{события},
+          но \emph{если} \emph{долго} \emph{нет}~---
+          \emph{показывает} \emph{что} есть. \emph{Компромисс}.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Что выбрать?} Для \emph{стабильного} сигнала~---
+\texttt{normal}. Для \emph{редких} импульсов~---
+\texttt{normal} (ждём). Для \emph{поиска} сигнала~---
+\texttt{auto}. \emph{По умолчанию}~--- \texttt{auto}.
+\end{keybox}
+
+\begin{table}[htbp]
+\centering
+\caption{Режимы триггера}
+\label{tab:trigger-modes}
+\small
+\begin{tabularx}{\textwidth}{@{}l L L@{}}
+\toprule
+\textbf{Режим} & \textbf{Что делает} & \textbf{Когда использовать} \\
+\midrule
+\texttt{off}    & Захватывает всё подряд & Отладка, поиск \\
+\texttt{normal} & Ждёт события, иначе~--- пусто & Стабильный сигнал \\
+\texttt{auto}   & Ждёт, но через таймаут~--- показывает & По умолчанию \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Предтриггер}
+\label{sec:trigger-pretrigger}
+
+\textbf{Проблема}: если триггер сработал~--- мы \emph{начинаем}
+запись. Но \emph{что} было \emph{до} триггера? \emph{Самое}
+интересное~--- \emph{перед} событием (например, \emph{фронт}
+импульса).
+
+\textbf{Решение}: \textbf{предтриггер} (pre-trigger).
+Буфер \emph{делится} на \emph{две} части:
+\begin{itemize}
+    \item \textbf{До триггера} (\texttt{pre})~--- \emph{уже}
+          \emph{захвачено} \emph{до} события.
+    \item \textbf{После триггера} (\texttt{post})~--- \emph{захватывается}
+          \emph{после} события.
+\end{itemize}
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    buf/.style={
+        draw, thick,
+        minimum height=1.5cm,
+        align=center,
+        font=\footnotesize
+    },
+    pre/.style={buf, fill=clrLogicData!20},
+    post/.style={buf, fill=clrWarn!20},
+    trigger/.style={
+        draw, thick, fill=clrWarn,
+        minimum width=0.1cm,
+        minimum height=1.5cm
+    },
+    label/.style={font=\footnotesize, inner sep=2pt}
+]
+% Координатная сетка
+\draw[step=1cm, gray!20, very thin] (-1, -2) grid (9, 2);
+% Буфер
+\node[pre,  minimum width=4cm] (pre)  at (1.5, 0) {pre (до)};
+\node[post, minimum width=4cm] (post) at (6.5, 0) {post (после)};
+% Триггер
+\node[trigger] at (4, 0) {};
+% Стрелка времени
+\draw[-{Latex[length=3mm]}, thick] (-1.0, -1.5) -- (9, -1.5) node[right] {\(t\)};
+% Подписи
+\node[label, above] at (1.5, 0.8) {\texttt{pre\_pct}};
+\node[label, below] at (1.5, -0.8) {\texttt{pre = 50\%}};
+\node[label, above] at (6.5, 0.8) {\texttt{post}};
+\node[label, below] at (6.5, -0.8) {\texttt{post = 50\%}};
+\node[label, above] at (4, 0.8) {\textbf{триггер}};
+% Метки осей
+\foreach \x in {-1,...,9} {
+    \node[font=\tiny, gray] at (\x, -2.3) {\x};}
+\foreach \y in {-2,-1,0,1,2} {
+    \node[font=\tiny, gray] at (-1.3, \y) {\y};}
+\end{tikzpicture}
+}% end adjustbox
+\caption{Предтриггер. Буфер делится на две части:
+\emph{до} триггера и \emph{после}. Триггер~--- в центре.}
+\label{fig:trigger-pretrigger}
+\end{figure}
+
+\textbf{Как это работает}:
+\begin{enumerate}
+    \item DMA \emph{пишет} в \emph{буфер}. \emph{До} триггера~---
+          \emph{все} данные \emph{идут} в \emph{pre}.
+    \item Триггер \emph{сработал}. \emph{С} этого момента~---
+          данные \emph{идут} в \emph{post}.
+    \item Когда \emph{post} \emph{заполнен}~--- \emph{кадр}
+          \emph{готов}. \emph{Отправляем} на ПК.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Зачем \texttt{pre\_pct}?} Это \emph{процент} буфера,
+который \emph{до} триггера. \texttt{50\%}~--- триггер
+\emph{в} \emph{центре}. \texttt{25\%}~--- \emph{больше}
+\emph{после}. \texttt{75\%}~--- \emph{больше} \emph{до}.
+\emph{Пользователь} \emph{выбирает}.
+\end{keybox}
+
+\section{Реализация на STM32}
+\label{sec:trigger-impl}
+
+\textbf{Как} \emph{реализовать} триггер на STM32? \emph{Два}
+варианта:
+
+\subsection{Вариант 1: программный триггер}
+
+\textbf{В} \emph{обработчике} DMA~\--- \emph{проверяем}
+каждый семпл:
+\begin{itemize}
+    \item Если \emph{сигнал} \emph{пересёк} уровень \emph{в}
+          \emph{нужном} направлении~--- \emph{запоминаем}
+          позицию.
+\end{itemize}
+
+\textbf{Плюс}: \emph{просто}.
+\textbf{Минус}: \emph{медленно} (\emph{много} проверок).
+
+\subsection{Вариант 2: аппаратный триггер (Analog Watchdog)}
+
+\textbf{ADC} \emph{умеет} \emph{сам} \emph{следить} за
+уровнем. Это~--- \textbf{Analog Watchdog} (AWD).
+\emph{Настраиваем} \emph{порог}~--- ADC \emph{генерирует}
+\emph{прерывание}, когда \emph{сигнал} \emph{пересекает}
+его.
+
+\textbf{Плюс}: \emph{быстро}, \emph{CPU} \emph{не} \emph{тратит}
+время.
+\textbf{Минус}: \emph{сложнее} \emph{настроить}.
+
+\begin{ideabox}
+\textbf{Какой вариант выбрать?} Для \emph{учебного}
+осциллографа~--- \emph{оба} \emph{подходят}. \emph{Мы}
+начнём с \emph{программного}~--- он \emph{понятнее}.
+\emph{Позже}~--- \emph{аппаратный} (\emph{если} \emph{нужна}
+\emph{скорость}).
+\end{ideabox}
+
+
+%%%%% ======================================
+
+
+
+\section{Код: trigger.c}
+\label{sec:trigger-code}
+
+\textbf{Теперь}~--- \emph{код}. Он \emph{короткий}, но
+\emph{плотный}. \emph{Каждая} строка \emph{важна}.
+
+\subsection{Программный триггер}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+static uint16_t trigger_level = 2048;
+static int8_t   trigger_edge  = 1;  // 1 = rising, -1 = falling
+static bool     trigger_found = false;
+static uint16_t trigger_pos   = 0;
+
+void trigger_check(const uint16_t *buf, uint16_t len)
+{
+    if (trigger_found) return;
+
+    for (uint16_t i = 1; i < len; i++) {
+        // Проверяем пересечение уровня
+        bool rising = (buf[i - 1] < trigger_level &&
+                       buf[i]     >= trigger_level);
+        bool falling = (buf[i - 1] > trigger_level &&
+                        buf[i]     <= trigger_level);
+
+        if ((trigger_edge == 1 && rising) ||
+            (trigger_edge == -1 && falling)) {
+            trigger_found = true;
+            trigger_pos   = i;
+            break;
+        }
+    }
+}
+\end{minted}
+\caption{\texttt{trigger\_check()}~--- программный триггер}
+\label{lst:trigger-check}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{trigger\_level}~--- \emph{уровень}
+          (\num{2048} = \SI{1.65}{\volt}).
+    \item \texttt{trigger\_edge}~--- \emph{направление}
+          (\texttt{1}~--- \emph{вверх}, \texttt{-1}~--- \emph{вниз}).
+    \item \texttt{trigger\_found}~--- \emph{флаг} (нашли
+          или \emph{нет}).
+    \item \texttt{trigger\_pos}~--- \emph{где} нашли
+          (индекс в буфере).
+\end{itemize}
+
+\begin{warnbox}
+\textbf{Почему \texttt{i = 1}, а не \texttt{0}?} Потому
+что \emph{сравниваем} \emph{текущий} с \emph{предыдущим}.
+\texttt{buf[0]}~--- \emph{не} с \emph{чем} сравнивать.
+\end{warnbox}
+
+\subsection{Интеграция с DMA}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    trigger_check(&dma_buf[0], OSC_DMA_POINTS);
+    if (trigger_found) {
+        push_block(&dma_buf[0], OSC_DMA_POINTS);
+    }
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    trigger_check(&dma_buf[OSC_DMA_POINTS], OSC_DMA_POINTS);
+    if (trigger_found) {
+        push_block(&dma_buf[OSC_DMA_POINTS], OSC_DMA_POINTS);
+    }
+}
+\end{minted}
+\caption{Интеграция триггера с DMA}
+\label{lst:trigger-dma}
+\end{listing}
+
+\textbf{Как это работает}:
+\begin{enumerate}
+    \item DMA \emph{заполняет} половину буфера.
+    \item \emph{Срабатывает} прерывание.
+    \item \texttt{trigger\_check()} \emph{ищет} уровень.
+    \item Если \emph{нашли}~--- \texttt{push\_block()} \emph{отправляет}
+          данные на ПК.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Почему в прерывании?} Потому что \emph{данные}
+\emph{готовы} \emph{сразу}. Если \emph{ждать} до
+\emph{основного} цикла~--- \emph{DMA} \emph{перезапишет}
+буфер. \emph{Прерывание}~--- \emph{единственный} способ
+\emph{успеть}.
+\end{keybox}
+
+\subsection{Предтриггер}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+// Внутри push_block
+static uint16_t pre_cnt = 0;
+static uint16_t post_cnt = 0;
+static uint16_t pre_limit = 0;
+
+void push_block(const uint16_t *src, uint16_t count)
+{
+    if (!trigger_found) {
+        // До триггера: копим в pre
+        pre_cnt = (pre_cnt + count > pre_limit) ?
+                  pre_limit : pre_cnt + count;
+        // ... копирование в pre-буфер ...
+    } else {
+        // После триггера: копим в post
+        post_cnt += count;
+        // ... копирование в post-буфер ...
+        if (post_cnt >= OSC_FRAME_POINTS - pre_limit) {
+            // Кадр готов!
+            send_frame();
+            pre_cnt = post_cnt = 0;
+            trigger_found = false;
+        }
+    }
+}
+\end{minted}
+\caption{Предтриггер в \texttt{push\_block()}}
+\label{lst:trigger-pretrigger}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{pre\_cnt}~--- \emph{сколько} уже \emph{накоплено}
+          \emph{до} триггера.
+    \item \texttt{pre\_limit}~--- \emph{максимум} \emph{до}
+          (\texttt{pre\_pct} \emph{от} \emph{размера} \emph{кадра}).
+    \item \texttt{post\_cnt}~--- \emph{сколько} \emph{после}.
+    \item \texttt{trigger\_found}~--- \emph{флаг}.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Ключевая идея}: \emph{до} триггера~--- \emph{копим}
+в \emph{pre}. \emph{После}~--- \emph{копим} в \emph{post}.
+\emph{Когда} \emph{post} \emph{заполнен}~--- \emph{кадр}
+\emph{готов}. \emph{Отправляем}.
+\end{keybox}
+
+\section{Уроки главы}
+\label{sec:trigger-lessons}
+
+\begin{enumerate}
+    \item \textbf{Триггер~--- это синхронизация.} Без
+          него~--- \emph{картинка} \emph{плывёт}. Он
+      \emph{начинает} захват \emph{в} \emph{одном} и \emph{том}
+      же месте сигнала.
+    \item \textbf{Уровень}~--- \emph{напряжение}, при котором
+          \emph{срабатывает} триггер.
+    \item \textbf{Фронт}~--- \emph{направление} пересечения
+          (\emph{вверх} или \emph{вниз}).
+    \item \textbf{Режимы}: \texttt{off}, \texttt{normal},
+          \texttt{auto}.  \emph{По умолчанию}~--- \texttt{auto}.
+    \item \textbf{Предтриггер}~--- \emph{буфер} \emph{до}
+          и \emph{после} события.
+    \item \textbf{Программный} \emph{триггер}~--- \emph{просто},
+          но \emph{медленно}.
+    \item \textbf{Аппаратный триггер} (\emph{AWD})~--- \emph{быстрее},
+          но \emph{сложнее}. 
+    \item \textbf{Интеграция с DMA}~--- \emph{только} в
+          \emph{прерывании}.
+\end{enumerate}
+
+
+\section{Чек-лист грабель}
+\label{sec:trigger-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли триггера}
+\label{tab:trigger-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & Триггер не срабатывает & Проверить уровень \\
+2 & Триггер срабатывает \emph{слишком} часто & Проверить фронт \\
+3 & Картинка \emph{плывёт} & Включить триггер \\
+4 & Триггер \emph{теряет} данные & Обработка в \emph{прерывании} \\
+5 & Нет предтриггера & Делить буфер на \emph{pre} и \emph{post} \\
+6 & \texttt{pre\_pct} > \num{100} & Ограничить \\
+7 & Долгий \texttt{trigger\_check()} & Оптимизировать или \emph{AWD} \\
+8 & Нет \emph{сброса} флага & \texttt{trigger\_found = false} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:trigger-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Нарисуйте \emph{сигнал} и \emph{уровень}
+триггера. Покажите \emph{точки} срабатывания для
+\emph{rising} и \emph{falling}.
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Что произойдёт, если \texttt{trigger\_edge = 0}?
+Приведите пример, когда это \emph{полезно}.
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Реализуйте \emph{аппаратный} триггер
+через \emph{AWD}. Какие регистры \emph{настроить}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Предложите способ \emph{автоматически}
+выбирать \emph{уровень} триггера (например, \emph{середина}
+сигнала). Как это \emph{упростит} жизнь пользователю?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:trigger-check}
+
+\begin{enumerate}
+    \item Подключите Nucleo к компьютеру.
+    \item Соберите прошивку (см. главу 2).
+    \item Подключите генератор к \texttt{PA0} (\SI{1}{\kilo\hertz},
+          \SI{1}{\volt}pp).
+    \item Запустите OpenOCD + GDB.
+    \item Поставьте точку останова в \texttt{trigger\_check()}.
+    \item Посмотрите, \emph{как} сигнал \emph{пересекает} уровень.
+    \item Сделайте \emph{скриншот} — \emph{пришлите} в книгу.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли триггер.} Это
+\emph{главное}. Без триггера~--- \emph{нет} осциллографа.
+\emph{Есть} только \emph{мусор} на экране. Дальше~---
+\emph{кольцо кадров}, \emph{USB}, \emph{графика}.
+\emph{Всё} \emph{впереди}.
+\end{ideabox}
+
+
