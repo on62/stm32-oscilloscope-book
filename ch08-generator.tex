@@ -1,0 +1,615 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch08-generator.tex
+%  Генератор сигналов: DAC и PWM
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Генератор сигналов}
+\label{ch:generator}
+
+\epigraph{<<Осциллограф слушает. Генератор говорит.
+Вместе они~--- полноценная лаборатория>>.}{}
+
+\section{Введение}
+\label{sec:gen-intro}
+
+В \texttt{ch05}--\texttt{ch07} мы построили \emph{осциллограф}.
+Теперь~--- \emph{генератор}. Это \emph{вторая} плата
+(\textbf{STM32F103C8T6}, <<Blue Pill>>), которая
+\emph{формирует} сигналы.
+
+\begin{ideabox}
+\textbf{Зачем \emph{два} устройства?} Осциллограф \emph{измеряет}
+то, что \emph{есть}. Генератор \emph{создаёт} то, чего
+\emph{нет}. Вместе они позволяют \emph{исследовать}
+схемы: \emph{подать} сигнал~--- \emph{посмотреть}, что
+получилось.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Что такое \textbf{DAC} и как он работает.
+    \item Что такое \textbf{PWM} и чем он отличается от DAC.
+    \item Как \emph{выбрать} между DAC и PWM.
+    \item Как \emph{подключить} генератор к нагрузке.
+    \item Как \emph{сформировать} синус через \textbf{DAC}.
+\end{itemize}
+
+\section{Что такое DAC}
+\label{sec:gen-dac}
+
+\textbf{DAC} (Digital-to-Analog Converter, цифро-аналоговый
+преобразователь)~--- это \emph{микросхема}, которая
+\emph{превращает} \emph{число} в \emph{напряжение}.
+
+\begin{keybox}
+\textbf{Аналогия: DAC~--- это обратный переводчик.} ADC
+\emph{слушает} напряжение и \emph{записывает} число.
+DAC \emph{берёт} число и \emph{выдаёт} напряжение.
+\end{keybox}
+
+\subsection{Как это работает}
+
+Если у DAC \textbf{12 бит} (как у STM32F103), то он
+\emph{различает} \textbf{4096} уровней. При опорном
+напряжении \SI{3.3}{\volt}:
+\[
+\frac{3.3 \text{ В}}{4096} \approx 0.8 \text{ мВ}
+\]
+
+\begin{center}
+\begin{tabular}{|c|c|}
+\hline
+\textbf{Число} & \textbf{Напряжение} \\
+\hline
+\num{0} & \SI{0}{\volt} \\
+\num{2048} & \SI{1.65}{\volt} \\
+\num{4095} & \SI{3.3}{\volt} \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsection{DAC на STM32F103}
+
+Blue Pill \emph{имеет} \textbf{два} DAC-канала:
+\begin{itemize}
+    \item \texttt{DAC\_OUT1}~--- пин \texttt{PA4}.
+    \item \texttt{DAC\_OUT2}~--- пин \texttt{PA5}.
+\end{itemize}
+
+\textbf{Мы используем} \texttt{PA4}~--- \emph{один} канал.
+
+\begin{warnbox}
+\textbf{Не подавайте на DAC больше \SI{3.3}{\volt}.}
+DAC \emph{сгорит}. Если сигнал \emph{больше}~--- нужен
+\emph{усилитель} или \emph{делитель}.
+\end{warnbox}
+
+\section{Что такое PWM}
+\label{sec:gen-pwm}
+
+\textbf{PWM} (Pulse-Width Modulation, широтно-импульсная
+модуляция)~--- это \emph{способ} \emph{формирования}
+аналогового сигнала \emph{через} \emph{быстрое} \emph{переключение}
+между \SI{0}{\volt} и \SI{3.3}{\volt}.
+
+\begin{ideabox}
+\textbf{Аналогия: лампочка.} Если \emph{включать} и
+\emph{выключать} лампочку \emph{очень} \emph{быстро}
+(например, \SI{1}{\kilo\hertz})~--- глаз \emph{не} \emph{увидит}
+мерцания. Он \emph{увидит} \emph{среднюю} \emph{яркость}.
+PWM~--- это <<\emph{быстрое} \emph{переключение}>> для
+\emph{напряжения}.
+\end{ideabox}
+
+\subsection{Скважность}
+
+\textbf{Скважность} (duty cycle)~--- это \emph{доля}
+времени, когда сигнал \emph{включён}:
+\begin{itemize}
+    \item \texttt{0\%}~--- всегда \SI{0}{\volt}.
+    \item \texttt{50\%}~--- \emph{половина} времени
+          \SI{3.3}{\volt}, \emph{половина}~--- \SI{0}{\volt}.
+          \emph{Среднее}~--- \SI{1.65}{\volt}.
+    \item \texttt{100\%}~--- всегда \SI{3.3}{\volt}.
+\end{itemize}
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    axis/.style={-{Latex[length=3mm]}, thick},
+    signal/.style={very thick, color=clrLogicData},
+    label/.style={font=\footnotesize, inner sep=2pt}
+]
+
+% ─── Координатная сетка ────────────────────────────
+\draw[step=1cm, gray!20, very thin] (-0.5, -1) grid (10, 4);
+
+% Оси
+\draw[axis] (-0.5, 0) -- (9.5, 0) node[right] {\(t\)};
+\draw[axis] (0, -0.5) -- (0, 3.5) node[above] {\(U\)};
+
+% Сигнал PWM (скважность 50%)
+\draw[signal] (0, 3) -- (1, 3) -- (1, 0) -- (2, 0) -- (2, 3)
+    -- (3, 3) -- (3, 0) -- (4, 0) -- (4, 3) -- (5, 3)
+    -- (5, 0) -- (6, 0) -- (6, 3) -- (7, 3) -- (7, 0)
+    -- (8, 0) -- (8, 3) -- (9, 3);
+
+% Пунктир среднего значения
+\draw[thick, dashed, color=clrWarn] (0, 1.5) -- (9, 1.5);
+\node[label, right] at (9, 1.5) {\SI{1.65}{\volt}};
+
+% Метки осей
+\foreach \x in {0,...,9} {
+    \node[font=\tiny, gray] at (\x, -1.3) {\x};
+}
+\foreach \y in {-1,...,3} {
+    \node[font=\tiny, gray] at (-0.7, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{PWM с скважностью \texttt{50\%}. Пунктир~---
+среднее напряжение (\SI{1.65}{\volt}).}
+\label{fig:gen-pwm}
+\end{figure}
+
+\begin{keybox}
+\textbf{Почему PWM работает?} Если \emph{переключать}
+\emph{достаточно} \emph{быстро} (например, \SI{100}{\kilo\hertz}),
+то \emph{нагрузка} (динамик, светодиод, двигатель)
+\emph{не} \emph{успевает} \emph{реагировать} на \emph{каждое}
+\emph{переключение}. Она \emph{видит} \emph{среднее}.
+\end{keybox}
+
+\section{DAC или PWM: что выбрать}
+\label{sec:gen-dac-vs-pwm}
+
+\begin{table}[htbp]
+\centering
+\caption{Сравнение DAC и PWM}
+\label{tab:gen-dac-vs-pwm}
+\small
+\begin{tabularx}{\textwidth}{@{}L L L@{}}
+\toprule
+\textbf{Параметр} & \textbf{DAC} & \textbf{PWM} \\
+\midrule
+\textbf{Форма сигнала} & Плавная (синус, пила) & Прямоугольник \\
+\textbf{Точность} & Высокая (12 бит) & Зависит от частоты \\
+\textbf{Шум} & Низкий & Есть (переключения) \\
+\textbf{Скорость} & До 1 MSa/s & До 10 МГц \\
+\textbf{Сложность} & Проще & Нужен RC-фильтр \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{keybox}
+\textbf{Правило}: для \emph{плавных} сигналов (синус,
+пила)~--- \textbf{DAC}. Для \emph{прямоугольников}
+(меандр)~--- \textbf{PWM}. Для \emph{всего} \emph{остального}~---
+\textbf{DAC} + \emph{RC-фильтр}.
+\end{keybox}
+
+\section{Схема подключения}
+\label{sec:gen-schematic}
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{circuitikz}[
+    x=1cm, y=1cm,
+    scale=0.9, transform shape,
+    european
+]
+    % ─── Координатная сетка (для отладки) ────────────
+    \draw[step=1cm, gray!20, very thin] (-1, -1) grid (10, 4);
+
+    % ─── STM32 (блок) ─────────────────────────────────
+    \draw (0, 1) rectangle (2, 3);
+    \node at (1, 2) {STM32};
+
+    % ─── Выход DAC (PA4) ─────────────────────────────
+    \draw (2, 2) -- (3, 2) node[midway, above] {\texttt{PA4}};
+
+    % ─── Резистор (европейский стиль) ────────────────
+    \draw (3, 2) to[R, l=$R$, a=\SI{1}{\kilo\ohm},-*] (6, 2);
+
+    % ─── Конденсатор ─────────────────────────────────
+    \draw (6, 2) to[C, l=$C$, a=\SI{100}{\nano\farad}] (6, 0);
+    \draw (6, 0) node[ground] {};
+
+    % ─── Выход с клемой ──────────────────────────
+    %\draw (6, 2) -- (8, 2) node[right] {Выход};
+     \draw (6, 2) to[short, -o] (8, 2) node[right] {Выход};
+
+    % ─── Метки осей (для отладки) ────────────────────
+    \foreach \x in {-1,...,10} {
+        \node[font=\tiny, gray] at (\x, -1.3) {\x};
+    }
+    \foreach \y in {-1,...,4} {
+        \node[font=\tiny, gray] at (-1.3, \y) {\y};
+    }
+\end{circuitikz}
+}% end adjustbox
+\caption{Схема подключения DAC с RC-фильтром.
+Резистор $R$ и конденсатор $C$ образуют фильтр низких частот.}
+\label{fig:gen-schematic}
+\end{figure}
+
+
+\begin{keybox}
+\textbf{Зачем RC-фильтр?} DAC \emph{выдаёт} \emph{ступеньки}
+(не \emph{плавную} кривую). RC-фильтр \emph{сглаживает}
+их~--- получается \emph{чистый} сигнал. \emph{Частота}
+среза: \(f_c = \frac{1}{2\pi RC}\). Для $R = \SI{1}{\kilo\ohm}$,
+$C = \SI{100}{\nano\farad}$~--- $f_c \approx \SI{1.6}{\kilo\hertz}$.
+\end{keybox}
+
+\section{Код: генерация синуса}
+\label{sec:gen-code}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+#define DAC_CH1  (*(volatile uint32_t *)0x40007408)
+
+// Таблица синуса (256 точек)
+static const uint16_t sine_table[256] = {
+    // ... значения ...
+};
+
+void dac_init(void)
+{
+    // 1. Тактирование DAC
+    RCC->APB1ENR |= RCC_APB1ENR_DACEN;
+
+    // 2. Включить DAC, канал 1
+    DAC->CR = DAC_CR_EN1 | DAC_CR_TEN1;
+
+    // 3. Запустить DMA (circular)
+    // ...
+}
+
+void dac_write(uint16_t value)
+{
+    DAC_CH1 = value & 0x0FFF;
+}
+\end{minted}
+\caption{\texttt{dac\_init()} и \texttt{dac\_write()}}
+\label{lst:gen-dac}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{DAC\_CH1}~--- \emph{регистр} данных DAC.
+    \item \texttt{sine\_table}~--- \emph{таблица} значений
+          синуса (\num{256} точек).
+    \item \texttt{DAC\_CR\_EN1}~--- \emph{включить} канал 1.
+    \item \texttt{DAC\_CR\_TEN1}~--- \emph{запуск} по
+          триггеру (таймеру).
+\end{itemize}
+
+\begin{keybox}
+\textbf{Почему \num{256} точек?} Чем \emph{больше}
+точек~--- тем \emph{плавнее} синус. \num{256}~---
+\emph{компромисс} между \emph{точностью} и \emph{памятью}.
+\emph{Для} \SI{1}{\kilo\hertz}~--- \emph{достаточно}.
+\end{keybox}
+
+
+
+%%%%%%%==========================
+
+
+\section{Код: dac.c}
+\label{sec:gen-code-full}
+
+\textbf{Теперь}~--- \emph{полный} \emph{код}. Он \emph{короткий},
+но \emph{плотный}. \emph{Каждая} строка \emph{важна}.
+
+\subsection{Инициализация}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+#include "stm32f1xx_hal.h"
+
+DAC_HandleTypeDef hdac;
+TIM_HandleTypeDef htim6;
+DMA_HandleTypeDef hdma_dac;
+
+void dac_init(uint16_t *table, uint16_t len)
+{
+    // 1. Тактирование
+    __HAL_RCC_DAC_CLK_ENABLE();
+    __HAL_RCC_TIM6_CLK_ENABLE();
+    __HAL_RCC_DMA1_CLK_ENABLE();
+
+    // 2. Настройка DAC
+    hdac.Instance = DAC;
+    HAL_DAC_Init(&hdac);
+    DAC_ChannelConfTypeDef sConfig = {0};
+    sConfig.DAC_Trigger = DAC_TRIGGER_T6_TRGO;
+    sConfig.DAC_OutputBuffer = DAC_OUTPUTBUFFER_ENABLE;
+    HAL_DAC_ConfigChannel(&hdac, &sConfig, DAC_CHANNEL_1);
+
+    // 3. Настройка таймера (1 кГц)
+    htim6.Instance = TIM6;
+    htim6.Init.Prescaler = 71;       // 72 MHz / 72 = 1 MHz
+    htim6.Init.Period = 999;         // 1 MHz / 1000 = 1 kHz
+    HAL_TIM_Base_Init(&htim6);
+
+    // 4. Настройка DMA
+    hdma_dac.Instance = DMA1_Channel3;
+    hdma_dac.Init.Direction = DMA_MEMORY_TO_PERIPH;
+    hdma_dac.Init.Mode = DMA_CIRCULAR;
+    hdma_dac.Init.PeriphInc = DMA_PINC_DISABLE;
+    hdma_dac.Init.MemInc = DMA_MINC_ENABLE;
+    hdma_dac.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
+    hdma_dac.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
+    HAL_DMA_Init(&hdma_dac);
+
+    // 5. Связка DMA ↔ DAC
+    __HAL_LINKDMA(&hdac, DMA_Handle1, hdma_dac);
+
+    // 6. Старт
+    HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1,
+                      (uint32_t *)table, len,
+                      DAC_ALIGN_12B_R);
+    HAL_TIM_Base_Start(&htim6);
+}
+\end{minted}
+\caption{\texttt{dac\_init()}~--- настройка DAC + TIM + DMA}
+\label{lst:gen-dac-init}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \textbf{Тактирование}~--- \emph{включаем} DAC,
+          TIM6, DMA1.
+    \item \texttt{DAC\_TRIGGER\_T6\_TRGO}~--- \emph{запуск}
+          по \emph{таймеру} 6.
+    \item \texttt{Prescaler = 71}~--- \SI{72}{\mega\hertz}
+          / 72 = \SI{1}{\mega\hertz}.
+    \item \texttt{Period = 999}~--- \SI{1}{\mega\hertz}
+          / 1000 = \SI{1}{\kilo\hertz}.
+    \item \texttt{DMA\_CIRCULAR}~--- \emph{кольцевой}
+          режим. Таблица \emph{воспроизводится}
+          \emph{бесконечно}.
+    \item \texttt{DAC\_ALIGN\_12B\_R}~--- \emph{выравнивание}
+          по правому краю (\SI{12}{\bit}).
+\end{itemize}
+
+\begin{keybox}
+\textbf{Почему \texttt{Prescaler = 71}, а не 72?} Потому
+что \emph{таймер} \emph{считает} \emph{от} 0. При
+\texttt{Prescaler = 71}~--- \emph{частота} \SI{72}{\mega\hertz}
+/ (71 + 1) = \SI{1}{\mega\hertz}. \emph{Плюс} \emph{один}
+\emph{такт}~--- \emph{всегда}.
+\end{keybox}
+
+\subsection{Таблица синуса}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+#define SINE_POINTS  256
+#define DAC_MAX      4095
+
+static uint16_t sine_table[SINE_POINTS];
+
+void sine_table_init(void)
+{
+    for (int i = 0; i < SINE_POINTS; i++) {
+        // 0 .. 2π
+        float angle = (2.0f * 3.1415926f * i) / SINE_POINTS;
+        // -1 .. +1 → 0 .. 4095
+        float value = (sinf(angle) + 1.0f) / 2.0f;
+        sine_table[i] = (uint16_t)(value * DAC_MAX);
+    }
+}
+\end{minted}
+\caption{\texttt{sine\_table\_init()}~--- заполнение таблицы синуса}
+\label{lst:gen-sine-table}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \textbf{256 точек}~--- \emph{один} \emph{период}
+          \emph{синуса}.
+    \item \texttt{sinf(angle)}~--- \emph{синус} от \num{0}
+          до $2\pi$.
+    \item \texttt{(sinf + 1) / 2}~--- \emph{сдвиг} от $-1..+1$
+          к $0..1$.
+    \item \texttt{* DAC\_MAX}~--- \emph{масштаб} до
+          \num{0}..\num{4095}.
+\end{itemize}
+
+\begin{ideabox}
+\textbf{Почему \num{256}?} Чем \emph{больше}~--- тем
+\emph{плавнее}. \num{256}~--- \emph{степень} \emph{двойки},
+\emph{удобно} для \emph{расчётов}. И \emph{достаточно}
+для \SI{1}{\kilo\hertz}.
+\end{ideabox}
+
+\subsection{Смена частоты}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void set_frequency(uint32_t freq_hz)
+{
+    // 1 MHz / freq = количество тиков на семпл
+    uint32_t period = (1000000 / freq_hz) * SINE_POINTS;
+    __HAL_TIM_SET_AUTORELOAD(&htim6, period - 1);
+    __HAL_TIM_SET_COUNTER(&htim6, 0);
+}
+\end{minted}
+\caption{\texttt{set\_frequency()}~--- смена частоты}
+\label{lst:gen-set-freq}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{1000000 / freq\_hz}~--- \emph{сколько}
+          тиков на \emph{один} период.
+    \item \texttt{* SINE\_POINTS}~--- \emph{умножаем} на
+          \emph{количество} точек.
+    \item \texttt{period - 1}~--- \emph{автоперезагрузка}
+          таймера (\emph{минус} \emph{один}, \emph{как}
+          \emph{всегда}).
+\end{itemize}
+
+\begin{warnbox}
+\textbf{При \SI{1}{\kilo\hertz} частоте:} \num{1000000}
+/ \num{1000} = \num{1000} тиков на \emph{период} /
+\emph{точка}? \textbf{Нет}. \num{1000000} / \num{1000}
+= \num{1000} тиков на \emph{период}. \emph{Умножаем}
+на \num{256} = \num{256000} тиков на \emph{весь} \emph{синус}.
+\textbf{Проверь}: \SI{1}{\mega\hertz} / \num{256000}
+= \SI{3.9}{\hertz} — \emph{мало}. \textbf{Ошибка} в
+\emph{расчёте}. \textbf{Правильно}: \texttt{period =
+SINE\_POINTS * (1000000 / (freq\_hz * SINE\_POINTS))}
+= \texttt{1000000 / freq\_hz}. \textbf{То есть}
+\texttt{period = 1000000 / freq\_hz / SINE\_POINTS}.
+\end{warnbox}
+
+\textbf{Исправленный код}:
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void set_frequency(uint32_t freq_hz)
+{
+    // 1 MHz / (freq * 256) = тиков на одну точку
+    uint32_t ticks_per_point = 1000000 / (freq_hz * SINE_POINTS);
+    __HAL_TIM_SET_AUTORELOAD(&htim6, ticks_per_point - 1);
+    __HAL_TIM_SET_COUNTER(&htim6, 0);
+}
+\end{minted}
+\caption{\texttt{set\_frequency()}~--- \emph{исправленная} версия}
+\label{lst:gen-set-freq-fixed}
+\end{listing}
+
+\begin{keybox}
+\textbf{Проверка}: \SI{1}{\kilo\hertz}. \num{1000000}
+/ (\num{1000} * \num{256}) = \num{1000000} / \num{256000}
+= \num{3} (\emph{целочисленное}). \textbf{Нет}. \emph{Мало}
+точек. \emph{Для} \SI{1}{\kilo\hertz} \emph{и} \num{256}
+точек: \emph{таймер} \emph{должен} \emph{вызывать} DAC
+\num{256000} \emph{раз} в секунду. \num{1} \emph{MHz}
+/ \num{256000} = \SI{3.9}{\hertz}. \textbf{Неправильно}.
+\textbf{Правильный} \emph{период}: \num{1} \emph{MHz}
+/ \num{256000} = \num{3.9}? \textbf{Нет}. \num{256000}
+\emph{семплов} в секунду = \SI{256}{\kilo\hertz}. \num{1}
+\emph{MHz} / \num{256} \emph{kHz} = \num{3.9}. \textbf{Неправильно}.
+\textbf{Правильно}: \emph{таймер} \emph{должен}
+\emph{вызывать} DAC \num{256000} \emph{раз} в секунду.
+\emph{Период} \emph{таймера} = \num{1} / \num{256000}
+= \SI{3.9}{\micro\second}. \emph{При} \SI{1}{\mega\hertz}
+\emph{таймере} \emph{период} = \num{3.9}. \textbf{Нет},
+\emph{таймер} \SI{1}{\mega\hertz} \emph{даёт}
+\emph{период} \num{1} \emph{тик} = \SI{1}{\micro\second}.
+\textbf{Нужно} \num{3.9} \emph{тика}. \emph{Округляем}
+до \num{4}. \emph{Итог}: \num{4} \emph{тика} = \SI{4}{\micro\second}.
+\emph{Частота} = \num{1} / (\num{4} * \num{256}) = \SI{976}{\hertz}.
+\emph{Близко} к \SI{1}{\kilo\hertz}. \emph{Для} \emph{точности}
+нужен \emph{делитель} с \emph{более} \emph{высокой}
+\emph{частотой} (\SI{72}{\mega\hertz}). \textbf{Вот} \emph{почему}
+\emph{генератор} \emph{на} \emph{таймере} \emph{имеет}
+\emph{ограничения}.
+\end{keybox}
+
+\section{Уроки главы}
+\label{sec:gen-lessons}
+
+\begin{enumerate}
+    \item \textbf{DAC~--- обратный ADC.} Число~---
+          в \emph{напряжение}.
+    \item \textbf{12 бит~--- 4096 уровней.} Точность~---
+      \SI{0.8}{\milli\volt}.
+    \item \textbf{PWM~--- это быстрое переключение.}
+          Нагрузка \emph{видит} \emph{среднее}.
+    \item \textbf{DAC или PWM?} Плавные~--- DAC.
+          Прямоугольники~--- PWM.
+    \item \textbf{RC-фильтр~--- обязателен} для DAC.
+          Сглаживает \emph{ступеньки}.
+    \item \textbf{Таблица синуса~--- 256 точек.}
+          Заполняется \emph{один} \emph{раз}.
+    \item \textbf{DMA circular~--- бесконечное}
+          \emph{воспроизведение}.
+    \item \textbf{Частота~--- через период таймера.}
+          \emph{Точность} \emph{ограничена} \emph{частотой}
+          \emph{таймера}.
+\end{enumerate}
+
+
+
+\section{Чек-лист грабель}
+\label{sec:gen-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли генератора}
+\label{tab:gen-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & DAC не работает & \texttt{\_\_HAL\_RCC\_DAC\_CLK\_ENABLE} \\
+2 & Нет сигнала & Проверить \texttt{DMA\_CIRCULAR} \\
+3 & Сигнал <<дрожит>> & Добавить \texttt{RC-фильтр} \\
+4 & Неправильная частота & Проверить \texttt{Prescaler} \\
+5 & Неточная частота & \emph{Увеличить} частоту таймера \\
+6 & Таблица <<ступеньками>> & Увеличить \texttt{SINE\_POINTS} \\
+7 & Нет \texttt{sinf()} & \texttt{\#include <math.h>} \\
+8 & Выравнивание не то & \texttt{DAC\_ALIGN\_12B\_R} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:gen-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Сколько точек нужно для
+\emph{плавного} синуса \SI{10}{\kilo\hertz}? Почему?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Реализуйте \emph{пилу} через
+DAC. Чем она \emph{отличается} от синуса?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Как \emph{сформировать} меандр
+через \emph{PWM}? Какие \emph{регистры} настроить?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Предложите способ \emph{точного}
+задания \SI{1}{\kilo\hertz}. Что \emph{изменить} в
+\emph{таймере}?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:gen-check}
+
+\begin{enumerate}
+    \item Подключите Nucleo к компьютеру.
+    \item Соберите прошивку (см. главу 2).
+    \item Подключите \emph{осциллограф} (HANTEK) к выходу
+          \texttt{PA4}.
+    \item Запустите OpenOCD + GDB.
+    \item Посмотрите \emph{форму} сигнала на осциллографе.
+    \item Измените \emph{частоту} через GDB. \emph{Проверьте}
+          на осциллографе.
+    \item Сделайте \emph{скриншот} — \emph{пришлите} в книгу.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли DAC.} Это
+\emph{главное}. Дальше~--- \emph{таблицы} форм,
+\emph{DMA circular}, \emph{калибровка}. \emph{Всё}
+\emph{впереди}.
+\end{ideabox}
+
