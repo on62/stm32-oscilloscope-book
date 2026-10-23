@@ -1,0 +1,423 @@
+% ═══════════════════════════════════════════════════════════════
+%  ch07-ring-buffer.tex
+%  Кольцо кадров: как не потерять данные
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Кольцо кадров}
+\label{ch:ring-buffer}
+
+\epigraph{<<Данные приходят быстрее, чем уходят. Кольцо~---
+это способ не потерять их по дороге>>.}{}
+
+\section{Введение}
+\label{sec:ring-intro}
+
+В \texttt{ch05} мы настроили ADC и DMA. В \texttt{ch06}~---
+добавили триггер. Теперь \emph{данные} \emph{текут}
+\emph{непрерывно}. Но \emph{куда} их \emph{девать}?
+
+\textbf{Проблема}: DMA \emph{пишет} с \emph{частотой}
+\SI{100}{\kilo\hertz}. USB CDC \emph{отправляет} с
+\emph{частотой} \SI{1}{\mega\hertz} (\emph{по} \emph{шине}),
+но \emph{пакетами}~--- \emph{не} \emph{мгновенно}.
+Пока USB \emph{отправляет} \emph{один} кадр~--- DMA
+\emph{уже} \emph{заполнил} \emph{следующий}.
+
+\textbf{Где} \emph{хранить} \emph{готовые} кадры, пока
+USB \emph{их} \emph{отправляет}?
+
+\begin{ideabox}
+\textbf{Аналогия: конвейер.} На \emph{заводе} \emph{детали}
+\emph{едут} по \emph{конвейеру}. \emph{Рабочий} (DMA)
+\emph{ставит} \emph{новую} деталь. \emph{Упаковщик} (USB)
+\emph{берёт} \emph{готовую}. \emph{Между} ними~---
+\emph{накопитель} (кольцо). Если \emph{рабочий} \emph{быстрее}
+\emph{упаковщика}~--- детали \emph{копятся}. Если \emph{накопитель}
+\emph{полон}~--- \emph{рабочий} \emph{ждёт}.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Что такое \emph{кольцевой буфер} и зачем он нужен.
+    \item Как \emph{синхронизировать} \emph{писателя} (DMA)
+          и \emph{читателя} (USB).
+    \item Что делать при \emph{переполнении}.
+    \item Как \emph{реализовать} кольцо кадров на STM32.
+\end{itemize}
+
+\section{Кольцевой буфер}
+\label{sec:ring-what}
+
+\textbf{Кольцевой буфер} (ring buffer, circular buffer)~---
+это \emph{массив} \emph{фиксированного} размера, который
+\emph{работает} \emph{по} \emph{кругу}.
+
+\textbf{Как} это \emph{работает}:
+\begin{enumerate}
+    \item \emph{Писатель} \emph{кладёт} данные \emph{в}
+          ячейку \texttt{write\_idx}.
+    \item \emph{Увеличивает} \texttt{write\_idx} \emph{на}
+          1 (\emph{по} \emph{модулю} \emph{размера}).
+    \item \emph{Читатель} \emph{берёт} данные \emph{из}
+          ячейки \texttt{read\_idx}.
+    \item \emph{Увеличивает} \texttt{read\_idx} \emph{на} 1.
+    \item \emph{Когда} \emph{дошли} \emph{до} \emph{конца}~---
+          \emph{возвращаемся} \emph{в} \emph{начало}.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    cell/.style={
+        draw, thick,
+        minimum width=1.5cm,
+        minimum height=1.2cm,
+        align=center,
+        font=\footnotesize\ttfamily
+    },
+    full/.style={cell, fill=clrLogicData!30},
+    empty/.style={cell, fill=white},
+    write/.style={cell, fill=clrWarn!30},
+    read/.style={cell, fill=clrUIData!30}
+]
+
+% ─── Координатная сетка ────────────────────────────
+\draw[step=1cm, gray!20, very thin] (-1, -2) grid (11, 2);
+
+% Ячейки кольца
+\node[read]  (c0) at (0, 0) {Кадр 0};
+\node[read]  (c1) at (2, 0) {Кадр 1};
+\node[full]  (c2) at (4, 0) {Кадр 2};
+\node[full]  (c3) at (6, 0) {Кадр 3};
+\node[write] (c4) at (8, 0) {Кадр 4};
+\node[empty] (c5) at (10, 0) {пусто};
+
+% Индексы
+\draw[-{Latex[length=3mm]}, very thick, color=clrUIData]
+    (c0.south) -- (0, -1) node[below] {\texttt{read\_idx}};
+\draw[-{Latex[length=3mm]}, very thick, color=clrWarn]
+    (c4.south) -- (8, -1) node[below] {\texttt{write\_idx}};
+
+% Подписи
+\node[font=\footnotesize, above] at (c0.north) {читается};
+\node[font=\footnotesize, above] at (c4.north) {пишется};
+
+% Метки осей (для отладки)
+\foreach \x in {-1,...,11} {
+    \node[font=\tiny, gray] at (\x, -2.3) {\x};
+}
+\foreach \y in {-2,-1,0,1,2} {
+    \node[font=\tiny, gray] at (-1.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Кольцевой буфер из шести кадров. \texttt{read\_idx}
+указывает на текущий читаемый кадр. \texttt{write\_idx}~---
+на текущий записываемый.}
+\label{fig:ring-buffer}
+\end{figure}
+
+\begin{keybox}
+\textbf{Почему кольцо?} Потому что \emph{память}
+\emph{ограничена}. Мы \emph{не} можем \emph{хранить}
+\emph{все} кадры. Но \emph{можем} \emph{хранить}
+\emph{последние} \texttt{N}. \emph{Старые}~---
+\emph{перезаписываются}.
+\end{keybox}
+
+\section{Синхронизация: писатель и читатель}
+\label{sec:ring-sync}
+
+\textbf{Проблема}: \emph{писатель} (DMA) и \emph{читатель}
+(USB)~--- \emph{разные} \emph{сущности}. Они \emph{работают}
+\emph{одновременно}. \emph{Что} если \emph{писатель}
+\emph{обгонит} \emph{читателя}?
+
+\textbf{Три} \emph{состояния}:
+\begin{enumerate}
+    \item \textbf{Пусто} (\texttt{read\_idx == write\_idx}).
+          \emph{Читатель} \emph{ждёт}.
+    \item \textbf{Заполнено} (\texttt{write\_idx + 1 == read\_idx}).
+          \emph{Писатель} \emph{ждёт} (\emph{некуда} писать).
+    \item \textbf{Есть данные} (\emph{иначе}). Оба
+          \emph{работают}.
+\end{enumerate}
+
+\begin{warnbox}
+\textbf{Что если \emph{писатель} \emph{обогнал}?}
+Он \emph{перезапишет} \emph{данные}, \emph{которые}
+\emph{ещё} \emph{не} \emph{прочитаны}. \emph{Потеря}.
+\textbf{Решение}: \emph{писатель} \emph{ждёт}, \emph{если}
+\emph{кольцо} \emph{полное} (\emph{или} \emph{увеличить}
+размер).
+\end{warnbox}
+
+\subsection{Атомарность}
+
+\textbf{Как} \emph{сделать} так, \emph{чтобы} \emph{не}
+\emph{было} \emph{состояния} \emph{гонки}? \emph{Ведь}
+\emph{писатель} и \emph{читатель}~--- \emph{разные}
+\emph{потоки} (\emph{или} \emph{прерывание} \emph{и}
+\emph{основной} \emph{цикл}).
+
+\textbf{Решение}: \emph{атомарные} \emph{операции}.
+\emph{В} STM32~--- \emph{можно} \emph{запретить}
+\emph{прерывания} \emph{на} \emph{короткое} \emph{время}:
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+__disable_irq();
+// критическая секция: обновляем индексы
+__enable_irq();
+\end{minted}
+\caption{Критическая секция}
+\label{lst:ring-critical}
+\end{listing}
+
+\begin{keybox}
+\textbf{Критическая секция~--- \emph{короткая}.}
+\emph{Запрет} \emph{прерываний}~--- \emph{на} \emph{несколько}
+\emph{тактов}. Если \emph{дольше}~--- \emph{пропускаются}
+\emph{прерывания} (ADC, USB). \textbf{Правило}:
+\emph{внутри}~--- \emph{только} \emph{индексы}.
+\end{keybox}
+
+\section{Переполнение}
+\label{sec:ring-overflow}
+
+\textbf{Что} \emph{делать}, \emph{если} \emph{USB}
+\emph{отстаёт}? \emph{Три} \emph{стратегии}:
+
+\subsection{Стратегия 1: блокировка}
+
+\textbf{Писатель} (DMA) \emph{ждёт}, \emph{пока}
+\emph{читатель} \emph{не} \emph{освободит} \emph{место}.
+\textbf{Плюс}: \emph{данные} \emph{не} \emph{теряются}.
+\textbf{Минус}: \emph{ADC} \emph{останавливается} (\emph{плохо}).
+
+\subsection{Стратегия 2: перезапись}
+
+\textbf{Писатель} \emph{перезаписывает} \emph{старые}
+\emph{данные}. \textbf{Плюс}: \emph{ADC} \emph{работает}.
+\textbf{Минус}: \emph{данные} \emph{теряются}.
+
+\subsection{Стратегия 3: счётчик потерь}
+
+\textbf{Писатель} \emph{перезаписывает}, \emph{но}
+\emph{увеличивает} \emph{счётчик} \emph{потерь}.
+\emph{Пользователь} \emph{видит}: <<\emph{потеряно}
+\emph{N} \emph{кадров}>>. \textbf{Плюс}: \emph{честно}.
+\textbf{Минус}: \emph{данные} \emph{теряются}.
+
+\begin{ideabox}
+\textbf{Что выбрать?} Для \emph{осциллографа}~---
+\emph{стратегия} 3. \emph{Честно} \emph{сказать}
+\emph{пользователю}: <<\emph{данные} \emph{потеряны}>>~---
+\emph{лучше}, \emph{чем} \emph{молча} \emph{испортить}
+\emph{картинку}.
+\end{ideabox}
+
+\section{Код: ring\_buffer.c}
+\label{sec:ring-code}
+
+\textbf{Теперь}~--- \emph{код}. Он \emph{короткий}, но
+\emph{плотный}. \emph{Каждая} строка \emph{важна}.
+
+\subsection{Структура}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+#define RING_SIZE 8
+
+typedef struct {
+    osc_frame_t frames[RING_SIZE];
+    volatile uint16_t write_idx;
+    volatile uint16_t read_idx;
+    volatile uint32_t dropped;
+} RingBuffer;
+\end{minted}
+\caption{Структура \texttt{RingBuffer}}
+\label{lst:ring-struct}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{frames[RING\_SIZE]}~--- \emph{массив}
+          кадров.
+    \item \texttt{write\_idx}~--- \emph{куда} \emph{писать}.
+    \item \texttt{read\_idx}~--- \emph{откуда} \emph{читать}.
+    \item \texttt{dropped}~--- \emph{счётчик} \emph{потерь}.
+    \item \texttt{volatile}~--- \emph{чтобы} \emph{компилятор}
+          \emph{не} \emph{оптимизировал}.
+\end{itemize}
+
+\subsection{Запись}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+bool ring_push(RingBuffer *rb, const osc_frame_t *frame)
+{
+    uint16_t next = (rb->write_idx + 1) % RING_SIZE;
+
+    if (next == rb->read_idx) {
+        // Кольцо полное
+        rb->dropped++;
+        return false;
+    }
+
+    rb->frames[rb->write_idx] = *frame;
+    __disable_irq();
+    rb->write_idx = next;
+    __enable_irq();
+    return true;
+}
+\end{minted}
+\caption{\texttt{ring\_push()}~--- запись}
+\label{lst:ring-push}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{next}~--- \emph{следующий} \emph{индекс}
+          (\emph{по} \emph{кругу}).
+    \item \texttt{next == read\_idx}~--- \emph{кольцо}
+          \emph{полное}.
+    \item \texttt{dropped++}~--- \emph{увеличиваем}
+          \emph{счётчик}.
+    \item \texttt{*frame}~--- \emph{копируем} \emph{кадр}
+          \emph{целиком}.
+    \item \texttt{\_\_disable\_irq()}~--- \emph{атомарно}
+          \emph{обновляем} \emph{индекс}.
+\end{itemize}
+
+\subsection{Чтение}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+bool ring_pop(RingBuffer *rb, osc_frame_t *out)
+{
+    if (rb->read_idx == rb->write_idx) {
+        return false;  // пусто
+    }
+
+    *out = rb->frames[rb->read_idx];
+    __disable_irq();
+    rb->read_idx = (rb->read_idx + 1) % RING_SIZE;
+    __enable_irq();
+    return true;
+}
+\end{minted}
+\caption{\texttt{ring\_pop()}~--- чтение}
+\label{lst:ring-pop}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{read\_idx == write\_idx}~--- \emph{пусто}.
+    \item \texttt{*out = ...}~--- \emph{копируем} \emph{кадр}
+          \emph{целиком}.
+    \item \texttt{read\_idx = ...}~--- \emph{сдвигаем}
+          \emph{индекс}.
+\end{itemize}
+
+\begin{warnbox}
+\textbf{Копируйте \emph{целиком}, а не \emph{по}
+\emph{указателю}.} Писатель \emph{может} \emph{перезаписать}
+кадр, \emph{пока} читатель \emph{его} \emph{читает}.
+\emph{Копия}~--- \emph{безопаснее}.
+\end{warnbox}
+
+\section{Уроки главы}
+\label{sec:ring-lessons}
+
+\begin{enumerate}
+    \item \textbf{Кольцо~--- это \emph{накопитель}.} Данные
+          \emph{копятся} \emph{между} DMA и USB.
+    \item \textbf{Три состояния}: \emph{пусто}, \emph{полно},
+          \emph{есть данные}.
+    \item \textbf{Атомарность}: \emph{индексы} \emph{обновляем}
+          \emph{в} \emph{критической} \emph{секции}.
+    \item \textbf{Переполнение}: \emph{три} \emph{стратегии}.
+          Для \emph{осциллографа}~--- \emph{счётчик} потерь.
+    \item \textbf{Копирование}: \emph{копируйте} \emph{кадр}
+          \emph{целиком}.
+    \item \textbf{\texttt{volatile}}: \emph{обязательно}
+          для \emph{индексов}.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:ring-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли кольцевого буфера}
+\label{tab:ring-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & Нет \texttt{volatile} & Компилятор \emph{оптимизирует} \\
+2 & Нет критической секции & Гонка данных \\
+3 & Передача \emph{указателя} & \emph{Копия} \\
+4 & Нет счётчика потерь & \emph{Честность} \\
+5 & \emph{Слишком} маленькое кольцо & Увеличить \\
+6 & \emph{Долгая} критическая секция & Только индексы \\
+7 & Нет проверки на \emph{пусто} & \emph{Падение} \\
+8 & Нет проверки на \emph{полно} & \emph{Потеря} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:ring-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Нарисуйте кольцо из \num{4} кадров.
+Покажите \texttt{read\_idx} и \texttt{write\_idx} для
+\emph{трёх} случаев: пусто, полно, два кадра.
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Что произойдёт, если \emph{убрать}
+\texttt{\_\_disable\_irq()} из \texttt{ring\_push()}?
+Приведите сценарий с \emph{гонкой}.
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Реализуйте \emph{стратегию}
+\emph{блокировки} (\emph{ждать}, \emph{пока} \emph{место}
+\emph{освободится}). Как это \emph{повлияет} на ADC?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Предложите способ \emph{передачи}
+\emph{указателя} вместо \emph{копирования} \emph{кадра}.
+Как \emph{избежать} гонки?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:ring-check}
+
+\begin{enumerate}
+    \item Подключите Nucleo к компьютеру.
+    \item Соберите прошивку (см. главу 2).
+    \item Подключите генератор к \texttt{PA0} (\SI{1}{\kilo\hertz},
+          \SI{1}{\volt}pp).
+    \item Запустите OpenOCD + GDB.
+    \item Поставьте точку останова в \texttt{ring\_push()}.
+    \item Посмотрите, как \emph{меняются} индексы.
+    \item Сделайте \emph{скриншот} — \emph{пришлите} в книгу.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли кольцо.} Это
+\emph{главное}. Без него~--- \emph{потери} данных.
+\emph{Есть} \emph{только} \emph{обрывки} сигнала. Дальше~---
+\emph{USB CDC}, \emph{графика}, \emph{осциллограмма}.
+\emph{Всё} \emph{впереди}.
+\end{ideabox}
