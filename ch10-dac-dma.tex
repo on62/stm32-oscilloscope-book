@@ -1,0 +1,356 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch10-dac-dma.tex
+%  DMA circular и калибровка генератора
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{DMA circular и калибровка}
+\label{ch:dac-dma}
+
+\epigraph{<<DMA~--- это как конвейер. Он работает, пока ты
+занимаешься другими делами>>.}{}
+
+\section{Введение}
+\label{sec:dac-dma-intro}
+
+В \texttt{ch09} мы написали \emph{таблицы} форм и
+\emph{DDS} \emph{аккумулятор}. Но \emph{есть} \emph{проблема}:
+если \emph{вызывать} \texttt{dds\_tick()} \emph{из}
+\emph{прерывания}, \emph{каждый} \emph{такт} \emph{CPU}
+\emph{тратит} \emph{время}. \emph{Для} \SI{1}{\mega\hertz}~---
+\emph{миллион} \emph{прерываний} \emph{в} \emph{секунду}.
+\emph{CPU} \emph{не} \emph{успевает} \emph{ничего} \emph{другого}.
+
+\textbf{Решение}: \textbf{DMA circular}. \emph{DMA} \emph{сам}
+\emph{читает} \emph{таблицу} \emph{и} \emph{пишет} \emph{в} DAC.
+\emph{CPU} \emph{свободен}.
+
+\begin{ideabox}
+\textbf{Аналогия: автопилот.} \emph{Без} DMA~--- \emph{пилот}
+(CPU) \emph{сам} \emph{крутит} \emph{штурвал} \emph{каждую}
+\emph{секунду}. \emph{С} DMA~--- \emph{автопилот} \emph{крутит}
+\emph{штурвал}, \emph{а} \emph{пилот} \emph{отдыхает} \emph{или}
+\emph{решает} \emph{другие} \emph{задачи}.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Как работает \textbf{DMA circular}.
+    \item Почему \emph{CPU} \emph{свободен}.
+    \item Как \emph{откалибровать} сигнал.
+    \item Как \emph{усилить} сигнал.
+    \item Как \emph{реализовать} это на STM32.
+\end{itemize}
+
+\section{DMA circular}
+\label{sec:dac-dma-what}
+
+\textbf{DMA} \emph{circular}~--- это \emph{режим}, при
+котором DMA \emph{читает} \emph{буфер} \emph{по} \emph{кругу}.
+Когда \emph{дошёл} \emph{до} \emph{конца}~--- \emph{начинает}
+\emph{с} \emph{начала}.
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    cell/.style={
+        draw, thick,
+        minimum width=1.2cm,
+        minimum height=1.2cm,
+        align=center,
+        font=\footnotesize\ttfamily
+    },
+    full/.style={cell, fill=clrLogicData!30},
+    active/.style={cell, fill=clrWarn!30},
+    arr/.style={-{Latex[length=3mm]}, very thick}
+]
+
+% ─── Координатная сетка (для отладки) ────────────
+\draw[step=1cm, gray!20, very thin] (-1, -1) grid (8, 3);
+
+% Ячейки
+\node[full]   (c0) at (0, 0) {A};
+\node[full]   (c1) at (1.3, 0) {B};
+\node[active] (c2) at (2.6, 0) {C};
+\node[full]   (c3) at (3.9, 0) {D};
+\node[full]   (c4) at (5.2, 0) {E};
+\node[full]   (c5) at (6.5, 0) {F};
+
+% Стрелки
+\draw[arr] (c0.north) to[bend left=40] (c5.north);
+\node[font=\footnotesize, above] at (3.2, 2.0) {по кругу};
+
+% Метки осей (для отладки)
+\foreach \x in {-1,...,8} {
+    \node[font=\tiny, gray] at (\x, -1.3) {\x};
+}
+\foreach \y in {-1,0,1,2,3} {
+    \node[font=\tiny, gray] at (-1.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{DMA circular. Буфер читается по кругу.
+Когда DMA доходит до конца~--- начинает сначала.}
+\label{fig:dac-dma-circular}
+\end{figure}
+
+\begin{keybox}
+\textbf{Почему \emph{circular}?} Потому что \emph{сигнал}~---
+\emph{периодический}. \emph{Синус} \emph{повторяется} \emph{каждый}
+\emph{период}. \emph{Нам} \emph{не} \emph{нужно} \emph{менять}
+\emph{таблицу}~--- \emph{достаточно} \emph{читать} её
+\emph{по} \emph{кругу}.
+\end{keybox}
+
+\subsection{Как это освобождает CPU}
+
+\textbf{Без} DMA:
+\begin{enumerate}
+    \item \emph{Таймер} \emph{срабатывает} \emph{каждый}
+          \emph{такт}.
+    \item \emph{Прерывание} \emph{вызывает} \texttt{dds\_tick()}.
+    \item CPU \emph{вычисляет} \emph{индекс}, \emph{пишет}
+          \emph{в} DAC.
+    \item \emph{Возвращается} \emph{к} \emph{работе}.
+    \item \emph{Повтор}.
+\end{enumerate}
+
+\textbf{С} DMA:
+\begin{enumerate}
+    \item \emph{CPU} \emph{настраивает} DMA \emph{один} \emph{раз}.
+    \item \emph{Таймер} \emph{срабатывает} \emph{каждый}
+          \emph{такт}.
+    \item \emph{DMA} \emph{читает} \emph{следующее}
+          \emph{значение} \emph{из} \emph{таблицы}.
+    \item \emph{DMA} \emph{пишет} \emph{в} DAC.
+    \item CPU \emph{свободен}.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{CPU \emph{не} \emph{тратит} \emph{время} \emph{на}
+\emph{каждый} \emph{семпл}.} \emph{DMA} \emph{делает}
+\emph{это} \emph{сам}. CPU \emph{занимается} \emph{USB},
+\emph{командами}, \emph{обработкой}.
+\end{keybox}
+
+\section{Калибровка}
+\label{sec:dac-calibration}
+
+\textbf{Проблема}: \emph{DAC} \emph{не} \emph{идеален}.
+\emph{Есть} \emph{ошибки}:
+\begin{itemize}
+    \item \textbf{Смещение} (offset): \emph{ноль} \emph{не}
+          \emph{точно} \emph{ноль}.
+    \item \textbf{Усиление} (gain): \emph{максимум} \emph{не}
+          \emph{точно} \emph{максимум}.
+    \item \textbf{Нелинейность}: \emph{синус} \emph{не}
+          \emph{совсем} \emph{синус}.
+\end{itemize}
+
+\textbf{Решение}: \emph{калибровка}. \emph{Измеряем}
+\emph{реальный} \emph{выход} \emph{и} \emph{корректируем}
+\emph{таблицу}.
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    axis/.style={-{Latex[length=3mm]}, thick},
+    ideal/.style={very thick, color=clrLogicData},
+    real/.style={very thick, color=clrWarn}
+]
+
+% ─── Координатная сетка ────────────────────────────
+\draw[step=1cm, gray!20, very thin] (-1, -1) grid (9, 6);
+
+% Оси
+\draw[axis] (-0.5, 0) -- (8.5, 0) node[right] {\(t\)};
+\draw[axis] (0, -0.5) -- (0, 5.5) node[above] {\(U\)};
+
+% Идеальный сигнал
+\draw[ideal, domain=0:8, samples=100]
+    plot (\x, {2.5 + 1.5 * sin(deg(2 * \x))});
+
+% Реальный сигнал (со смещением и искажением)
+\draw[real, domain=0:8, samples=100]
+    plot (\x, {2.8 + 1.3 * sin(deg(2 * \x + 0.2))});
+
+% Легенда
+\node[font=\footnotesize, fill=white] at (6.5, 5) {идеал};
+\node[font=\footnotesize, fill=white] at (6.5, 4.5) {реал};
+
+% Метки осей (для отладки)
+\foreach \x in {-1,...,9} {
+    \node[font=\tiny, gray] at (\x, -1.3) {\x};
+}
+\foreach \y in {-1,...,6} {
+    \node[font=\tiny, gray] at (-1.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Идеальный (зелёный) и реальный (красный) сигналы.
+Реальный~--- со \emph{смещением} и \emph{искажением}.}
+\label{fig:dac-calibration}
+\end{figure}
+
+\subsection{Метод калибровки}
+
+\textbf{Три} \emph{шага}:
+\begin{enumerate}
+    \item \textbf{Измерить} \emph{выход} \emph{при}
+          \emph{известных} \emph{значениях} DAC (\num{0},
+          \num{2048}, \num{4095}).
+    \item \textbf{Вычислить} \emph{коэффициенты} \emph{смещения}
+          \emph{и} \emph{усиления}.
+    \item \textbf{Применить} \emph{коррекцию} \emph{к}
+          \emph{каждому} \emph{значению} \emph{из} \emph{таблицы}.
+\end{enumerate}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void dac_calibrate(void)
+{
+    // 1. Измерить реальные значения
+    uint16_t raw_min = adc_read(); // при DAC = 0
+    uint16_t raw_max = adc_read(); // при DAC = 4095
+
+    // 2. Вычислить коэффициенты
+    float scale = (float)DAC_MAX / (raw_max - raw_min);
+    float offset = -raw_min * scale;
+
+    // 3. Применить к таблице
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        for (int w = 0; w < WAVE_COUNT; w++) {
+            uint16_t v = wave_table[w][i];
+            v = (uint16_t)(v * scale + offset);
+            if (v > DAC_MAX) v = DAC_MAX;
+            wave_table[w][i] = v;
+        }
+    }
+}
+\end{minted}
+\caption{\texttt{dac\_calibrate()}~--- калибровка}
+\label{lst:dac-calibrate}
+\end{listing}
+
+\begin{warnbox}
+\textbf{Калибровка~--- \emph{одноразовая} процедура.}
+\emph{Запускается} \emph{при} \emph{старте} (или
+\emph{по} \emph{команде}). \emph{Результат}
+\emph{сохраняется} \emph{в} \emph{таблице}.
+\emph{Дальше}~--- \emph{используется}.
+\end{warnbox}
+
+\section{Усилитель}
+\label{sec:dac-amplifier}
+
+\textbf{DAC} \emph{выдаёт} \SI{0}{\volt}--\SI{3.3}{\volt}.
+\emph{Для} \emph{большинства} \emph{задач} \emph{этого}
+\emph{достаточно}. \emph{Но} \emph{иногда} \emph{нужно}
+\emph{больше}.
+
+\begin{ideabox}
+\textbf{Аналогия: микрофон и усилитель.} \emph{Микрофон}
+\emph{выдаёт} \emph{слабый} \emph{сигнал} (\SI{10}{\milli\volt}).
+\emph{Усилитель} \emph{увеличивает} \emph{его} \emph{до}
+\SI{1}{\volt} \emph{для} \emph{динамиков}. \emph{То} \emph{же}
+\emph{с} DAC.
+\end{ideabox}
+
+\textbf{Простой} \emph{усилитель} \emph{на} \emph{транзисторе}:
+\begin{itemize}
+    \item \emph{Коэффициент} \emph{усиления}: $K = R_C / R_E$.
+    \item \emph{Для} $K = 2$: $R_C = 2 R_E$.
+\end{itemize}
+
+\section{Уроки главы}
+\label{sec:dac-dma-lessons}
+
+\begin{enumerate}
+    \item \textbf{DMA circular~--- это автопилот.} CPU
+          \emph{свободен}.
+    \item \textbf{Буфер читается по кругу.} Сигнал
+          \emph{периодический}.
+    \item \textbf{Калибровка~--- обязательна.} DAC
+          \emph{не идеален}.
+    \item \textbf{Смещение и усиление~--- две ошибки.}
+          \emph{Корректируются} \emph{коэффициентами}.
+    \item \textbf{Усилитель~--- если нужно больше.}
+          \emph{Простой} \emph{транзистор}.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:dac-dma-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли DMA circular и калибровки}
+\label{tab:dac-dma-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & DMA не запускается & \texttt{HAL\_DAC\_Start\_DMA} \\
+2 & \emph{Нет} сигнала & Проверить \texttt{DMA\_CIRCULAR} \\
+3 & Нет калибровки & \texttt{dac\_calibrate()} \\
+4 & Переполнение & Ограничить \texttt{DAC\_MAX} \\
+5 & Усилитель <<гудит>> & \emph{Добавить} \emph{фильтр} \\
+6 & Неточная частота & \emph{Проверить} \emph{таймер} \\
+7 & Нет \texttt{volatile} & \emph{Добавить} \\
+8 & \emph{Забыли} \texttt{\_\_HAL\_RCC} & Добавить \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:dac-dma-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Нарисуйте \emph{диаграмму} DMA
+circular с \num{4} ячейками. Покажите \emph{позицию}
+DMA \emph{через} \num{3} \emph{такта}.
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Что \emph{произойдёт}, если
+\emph{убрать} \texttt{DMA\_CIRCULAR}? \emph{Приведите}
+\emph{пример}.
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Реализуйте \emph{калибровку}
+\emph{через} \emph{ADC} и \emph{таблицу} \emph{поправок}.
+\emph{Как} \emph{сохранить} \emph{результат}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Предложите \emph{схему} \emph{усилителя}
+\emph{с} \emph{коэффициентом} \num{3}. \emph{Какие}
+\emph{резисторы} \emph{выбрать}?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:dac-dma-check}
+
+\begin{enumerate}
+    \item Подключите Nucleo к компьютеру.
+    \item Соберите прошивку (см. главу 2).
+    \item Подключите осциллограф (HANTEK) к выходу \texttt{PA4}.
+    \item Запустите OpenOCD + GDB.
+    \item Посмотрите \emph{форму} сигнала на осциллографе.
+    \item Запустите \emph{калибровку}. Сравните.
+    \item Сделайте \emph{скриншот} — \emph{пришлите} в книгу.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли DMA circular.}
+Это \emph{главное}. Дальше~--- \emph{USB}, \emph{ПК},
+\emph{GTK4}. \emph{Всё} \emph{впереди}.
+\end{ideabox}
