@@ -1,0 +1,568 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch09-dds.tex
+%  Таблицы форм: DDS на STM32
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Таблицы форм: DDS на STM32}
+\label{ch:dds}
+
+\epigraph{<<DDS~--- это способ генерировать любую форму
+сигнала, не меняя схему. Только цифры>>.}{}
+
+\section{Введение}
+\label{sec:dds-intro}
+
+В \texttt{ch08} мы сгенерировали \emph{синус} через DAC.
+Но \emph{что}, если \emph{нужна} \emph{другая} \emph{форма}?
+\emph{Меандр}? \emph{Пила}? \emph{Треугольник}?
+
+\textbf{Можно} \emph{переписать} \emph{таблицу}~--- \emph{и}
+\emph{всё}. \emph{Но} \emph{есть} \emph{лучший} \emph{способ}~---
+\textbf{DDS} (Direct Digital Synthesis, \emph{прямой}
+\emph{цифровой} \emph{синтез}).
+
+\begin{ideabox}
+\textbf{Аналогия: проигрыватель пластинок.} \emph{Таблица}
+форм~--- это \emph{пластинка}. \emph{DDS}~--- это
+\emph{игла}, которая \emph{читает} её \emph{с} \emph{разной}
+\emph{скоростью}. \emph{Хочешь} \emph{быстрее}~---
+\emph{крутишь} \emph{быстрее}. \emph{Хочешь} \emph{медленнее}~---
+\emph{медленнее}. \emph{Форма} \emph{сигнала} \emph{та} \emph{же},
+\emph{частота}~--- \emph{другая}.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Что такое \textbf{DDS} и \emph{зачем} он нужен.
+    \item Как работает \textbf{аккумулятор} \emph{фазы}.
+    \item Как \emph{генерировать} \emph{разные} \emph{формы}
+          сигналов.
+    \item Как \emph{менять} \emph{частоту} \emph{на} \emph{лету}.
+    \item Как \emph{реализовать} DDS на STM32.
+\end{itemize}
+
+\section{Что такое DDS}
+\label{sec:dds-what}
+
+\textbf{DDS}~--- это \emph{метод} \emph{генерации} \emph{сигнала}
+\emph{через} \emph{таблицу} \emph{значений} и
+\emph{аккумулятор} \emph{фазы}.
+
+\textbf{Обычный} \emph{подход}: \emph{таблица} \emph{синуса}
+\emph{воспроизводится} \emph{с} \emph{фиксированной}
+\emph{частотой}. \emph{Чтобы} \emph{изменить} \emph{частоту}~---
+\emph{меняем} \emph{частоту} \emph{таймера}. \emph{Но}
+\emph{это} \emph{грубо}.
+
+\textbf{DDS} \emph{подход}: \emph{таблица} \emph{воспроизводится}
+\emph{с} \emph{постоянной} \emph{частотой} (\emph{высокой}),
+\emph{а} \emph{частота} \emph{сигнала} \emph{меняется}
+\emph{через} \emph{шаг} \emph{по} \emph{таблице}.
+
+\begin{keybox}
+\textbf{Ключевая идея DDS}: \emph{мы} \emph{не} \emph{меняем}
+\emph{частоту} \emph{таймера}. \emph{Мы} \emph{меняем},
+\emph{как} \emph{быстро} \emph{двигаемся} \emph{по}
+\emph{таблице}.
+\end{keybox}
+
+\section{Аккумулятор фазы}
+\label{sec:dds-phase}
+
+\textbf{Аккумулятор} \emph{фазы} (phase accumulator)~---
+это \emph{регистр}, который \emph{хранит} \emph{текущую}
+\emph{позицию} в \emph{таблице}.
+
+\textbf{Как} это \emph{работает}:
+\begin{enumerate}
+    \item Есть \emph{таблица} \emph{из} $N$ \emph{значений}.
+    \item Есть \emph{регистр} \emph{фазы} (например, \num{32}
+          \emph{бита}).
+    \item На \emph{каждом} \emph{такте} \emph{таймера}
+          \emph{регистр} \emph{фазы} \emph{увеличивается}
+          \emph{на} \emph{шаг} (\texttt{phase\_increment}).
+    \item \emph{Старшие} \emph{биты} \emph{регистра} \emph{фазы}~---
+          это \emph{индекс} в \emph{таблице}.
+    \item DAC \emph{выдаёт} \emph{значение} \emph{из} \emph{таблицы}.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    box/.style={
+        draw, thick,
+        minimum width=2cm, minimum height=1cm,
+        align=center, font=\footnotesize\ttfamily
+    },
+    reg/.style={box, fill=clrLogicData!20},
+    table/.style={box, fill=clrUIData!20},
+    dac/.style={box, fill=clrHWData!20},
+    arr/.style={-{Latex[length=3mm]}, thick}
+]
+
+% ─── Координатная сетка (для отладки) ────────────
+\draw[step=1cm, gray!20, very thin] (-1, -1) grid (12, 4);
+
+% Регистр фазы
+\node[reg] (acc) at (1, 2) {\texttt{phase}};
+\node[font=\footnotesize, above] at (1, 2.7) {регистр};
+
+% Инкремент
+\node[reg, minimum width=1.5cm] (inc) at (1, 0) {\texttt{inc}};
+\draw[arr] (inc.north) -- (acc.south);
+\node[font=\footnotesize, left] at (0, 1) {+};
+
+% Таблица
+\node[table] (tab) at (5, 2) {таблица\\[2pt]\num{256} точек};
+\draw[arr] (acc.east) -- (tab.west)
+    node[midway, above, font=\footnotesize] {индекс};
+
+% DAC
+\node[dac] (dac) at (9, 2) {DAC};
+\draw[arr] (tab.east) -- (dac.west)
+    node[midway, above, font=\footnotesize] {значение};
+
+% Метки осей (для отладки)
+\foreach \x in {-1,...,12} {
+    \node[font=\tiny, gray] at (\x, -1.3) {\x};
+}
+\foreach \y in {-1,...,4} {
+    \node[font=\tiny, gray] at (-1.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Аккумулятор фазы. На каждом такте регистр
+\emph{увеличивается} на \texttt{inc}. Старшие биты~---
+\emph{индекс} в таблице.}
+\label{fig:dds-phase}
+\end{figure}
+
+\subsection{Как это даёт частоту}
+
+\textbf{Пример}: таблица \emph{из} \num{256} \emph{точек}.
+Регистр \emph{фазы}~--- \num{32} \emph{бита}. \emph{Старшие}
+\num{8} \emph{бит}~--- \emph{индекс} (0..255).
+
+\textbf{Шаг} (\texttt{inc}):
+\begin{itemize}
+    \item Если \texttt{inc = 1}~--- \emph{каждый} \emph{такт}
+          \emph{проходим} \emph{одну} \emph{точку}. \emph{Полный}
+          \emph{цикл}~--- \num{256} \emph{тактов}.
+    \item Если \texttt{inc = 2}~--- \emph{каждый} \emph{такт}
+          \emph{проходим} \emph{две} \emph{точки}. \emph{Полный}
+          \emph{цикл}~--- \num{128} \emph{тактов}. \emph{В} \emph{два}
+          \emph{раза} \emph{быстрее}.
+    \item Если \texttt{inc = 256}~--- \emph{перескакиваем}
+          \emph{всю} \emph{таблицу} \emph{за} \emph{один}
+          \emph{такт}. \emph{Цикл}~--- \emph{один} \emph{такт}.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Формула}: \(f_{out} = \frac{f_{clock} \times inc}{2^{32}}\).
+\emph{Чем} \emph{больше} \texttt{inc}~--- \emph{тем}
+\emph{выше} \emph{частота}. \emph{Меняем} \texttt{inc}~---
+\emph{меняем} \emph{частоту}. \emph{Так} \emph{работает}
+\emph{DDS}.
+\end{keybox}
+
+\section{Формы сигналов}
+\label{sec:dds-waves}
+
+\textbf{DDS} \emph{позволяет} \emph{генерировать} \emph{любую}
+\emph{форму}, \emph{которая} \emph{есть} \emph{в} \emph{таблице}.
+
+\subsection{Синус}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+value = sin(2 * PI * i / N);
+\end{minted}
+
+\textbf{Плавная} \emph{кривая}. \emph{Есть} \emph{во} \emph{всех}
+\emph{природных} \emph{явлениях}.
+
+\subsection{Меандр}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+value = (i < N / 2) ? MAX : 0;
+\end{minted}
+
+\textbf{Прямоугольник}. \emph{Половина} \emph{периода}~---
+\emph{максимум}, \emph{половина}~--- \emph{ноль}.
+\emph{Используется} \emph{в} \emph{цифровых} \emph{схемах}.
+
+\subsection{Пила}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+value = i * MAX / N;
+\end{minted}
+
+\textbf{Линейно} \emph{растёт} \emph{и} \emph{резко} \emph{падает}.
+\emph{Используется} \emph{в} \emph{развёртках}.
+
+\subsection{Треугольник}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+value = (i < N / 2)
+    ? (i * MAX / (N / 2))
+    : ((N - i) * MAX / (N / 2));
+\end{minted}
+
+\textbf{Линейно} \emph{растёт} \emph{и} \emph{линейно}
+\emph{падает}. \emph{Симметричен}.
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    signal/.style={very thick, color=clrLogicData},
+    axis/.style={-{Latex[length=3mm]}, thick}
+]
+
+% ─── Координатная сетка ────────────────────────────
+\draw[step=1cm, gray!20, very thin] (-1, 1) grid (12, 5);
+
+% Оси
+\draw[axis] (-0.5, 1.5) -- (11.5, 1.5) node[below] {\(t\)};
+
+% Синус
+\node[font=\footnotesize, above] at (1.5, 4.2) {синус};
+\draw[signal, domain=0:3, samples=50]
+    plot (\x, {3 + 0.8 * sin(deg(2.5 * \x))});
+
+% Меандр
+\node[font=\footnotesize, above] at (5.5, 4.2) {меандр};
+\draw[signal] (4, 2) -- (4.5, 2) -- (4.5, 4) -- (5.5, 4)
+    -- (5.5, 2) -- (6.5, 2) -- (6.5, 4) -- (7, 4);
+
+% Пила
+\node[font=\footnotesize, above] at (9.5, 4.2) {пила};
+\draw[signal] (8, 2) -- (9.5, 4) -- (9.5, 2) -- (11, 4) -- (11, 2);
+
+% Метки осей (для отладки)
+\foreach \x in {-1,...,12} {
+    \node[font=\tiny, gray] at (\x, 0.8) {\x};
+}
+\foreach \y in {1,...,5} {
+    \node[font=\tiny, gray] at (-1.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Три формы сигналов: синус, меандр, пила.}
+\label{fig:dds-waves}
+\end{figure}
+
+\section{Преимущества DDS}
+\label{sec:dds-advantages}
+
+\textbf{Почему} DDS \emph{лучше} \emph{обычного} \emph{подхода}:
+
+\begin{enumerate}
+    \item \textbf{Точная частота}. \emph{Частота}
+          \emph{задаётся} \emph{числом}, \emph{а} \emph{не}
+          \emph{частотой} \emph{таймера}. \emph{Точность}~---
+          \emph{доли} \emph{герца}.
+    \item \textbf{Плавная перестройка}. \emph{Частоту}
+          \emph{можно} \emph{менять} \emph{на} \emph{лету}.
+          \emph{Без} \emph{перезапуска}.
+    \item \textbf{Любая форма}. \emph{Таблица} \emph{может}
+          \emph{содержать} \emph{любую} \emph{форму}~---
+          \emph{синус}, \emph{меандр}, \emph{пилу}, \emph{даже}
+          \emph{вашу} \emph{собственную}.
+    \item \textbf{Стабильность}. \emph{Нет} \emph{дрожания},
+          \emph{как} \emph{у} \emph{таймера}.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Цена DDS}: \emph{нужна} \emph{память} \emph{под}
+\emph{таблицу} (\num{256}--\num{1024} \emph{значений})
+\emph{и} \emph{быстрый} \emph{таймер} (\SI{1}{\mega\hertz}+).
+\emph{Для} \emph{учебного} \emph{осциллографа}~--- \emph{идеально}.
+\end{keybox}
+
+
+
+%%%%%% ===============================
+
+
+\section{Код: wave\_table.c}
+\label{sec:dds-code}
+
+\textbf{Теперь}~--- \emph{код}. Он \emph{короткий}, но
+\emph{плотный}. \emph{Каждая} строка \emph{важна}.
+
+\subsection{Структура таблицы}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+#define TABLE_SIZE 256
+#define DAC_MAX    4095
+
+typedef enum {
+    WAVE_SINE = 0,
+    WAVE_SQUARE,
+    WAVE_SAW,
+    WAVE_TRIANGLE,
+    WAVE_COUNT
+} wave_type_t;
+
+static uint16_t wave_table[WAVE_COUNT][TABLE_SIZE];
+static wave_type_t current_wave = WAVE_SINE;
+\end{minted}
+\caption{Структура таблиц форм}
+\label{lst:dds-table-struct}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{TABLE\_SIZE}~--- \num{256} точек на форму.
+    \item \texttt{DAC\_MAX}~--- \num{4095} (\SI{12}{\bit}).
+    \item \texttt{wave\_type\_t}~--- \emph{перечисление} форм.
+    \item \texttt{wave\_table[WAVE\_COUNT][TABLE\_SIZE]}~---
+          \emph{двумерный} \emph{массив}: \emph{формы} $\times$ \emph{точки}.
+    \item \texttt{current\_wave}~--- \emph{текущая} форма.
+\end{itemize}
+
+\subsection{Заполнение таблиц}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+#include <math.h>
+
+void wave_table_init(void)
+{
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        float t = (float)i / TABLE_SIZE;
+
+        // Синус
+        wave_table[WAVE_SINE][i] =
+            (uint16_t)((sinf(2.0f * M_PI * t) + 1.0f) / 2.0f * DAC_MAX);
+
+        // Меандр
+        wave_table[WAVE_SQUARE][i] =
+            (t < 0.5f) ? DAC_MAX : 0;
+
+        // Пила
+        wave_table[WAVE_SAW][i] =
+            (uint16_t)(t * DAC_MAX);
+
+        // Треугольник
+        float tri = (t < 0.5f) ? (t * 2.0f) : (2.0f - t * 2.0f);
+        wave_table[WAVE_TRIANGLE][i] =
+            (uint16_t)(tri * DAC_MAX);
+    }
+}
+\end{minted}
+\caption{\texttt{wave\_table\_init()}~--- заполнение таблиц}
+\label{lst:dds-table-init}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{t = i / TABLE\_SIZE}~--- \emph{нормализованное}
+          \emph{время} (\num{0}..\num{1}).
+    \item \texttt{sinf(2πt)}~--- \emph{синус} от \num{0}
+          до $2\pi$.
+    \item \texttt{(sinf + 1) / 2}~--- \emph{сдвиг} к \num{0}..\num{1}.
+    \item \texttt{* DAC\_MAX}~--- \emph{масштаб} к \num{0}..\num{4095}.
+    \item \texttt{t < 0.5}~--- \emph{первая} \emph{половина}
+          \emph{периода}.
+    \item \texttt{tri}~--- \emph{треугольник}: \emph{растёт}
+          \emph{до} \num{0.5}, \emph{падает} \emph{после}.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Почему \num{256} точек?} \emph{Степень}
+\emph{двойки}~--- \emph{удобно} \emph{для} \emph{расчётов}
+(\emph{сдвиг} \emph{вместо} \emph{деления}). \emph{Достаточно}
+\emph{для} \emph{плавного} \emph{синуса}. \emph{Больше}~---
+\emph{лучше}, \emph{но} \emph{больше} \emph{памяти}.
+\end{keybox}
+
+\subsection{DDS аккумулятор}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+#define PHASE_BITS    32
+#define PHASE_MASK    0xFFFFFFFF
+
+static uint32_t phase_acc = 0;
+static uint32_t phase_inc = 0;
+
+// Вызывается по прерыванию таймера
+void dds_tick(void)
+{
+    phase_acc = (phase_acc + phase_inc) & PHASE_MASK;
+
+    // Старшие 8 бит — индекс в таблице
+    uint16_t index = phase_acc >> (PHASE_BITS - 8);
+
+    // Выдаём значение в DAC
+    dac_write(wave_table[current_wave][index]);
+}
+
+void dds_set_freq(uint32_t freq_hz, uint32_t timer_clk_hz)
+{
+    // f_out = f_clk * inc / 2^32
+    // inc = f_out * 2^32 / f_clk
+    phase_inc = (uint32_t)(((uint64_t)freq_hz << PHASE_BITS) / timer_clk_hz);
+}
+\end{minted}
+\caption{DDS: аккумулятор фазы и установка частоты}
+\label{lst:dds-acc}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{phase\_acc}~--- \emph{аккумулятор}
+          \emph{фазы} (\num{32} \emph{бита}).
+    \item \texttt{phase\_inc}~--- \emph{шаг} \emph{за}
+          \emph{такт}.
+    \item \texttt{(phase\_acc + phase\_inc) \& PHASE\_MASK}~---
+          \emph{инкремент} \emph{по} \emph{модулю} $2^{32}$
+          (\emph{переполнение}~--- \emph{не} \emph{ошибка},
+          \emph{а} \emph{цикл}).
+    \item \texttt{phase\_acc >> 24}~--- \emph{старшие} \num{8}
+          \emph{бит}~--- \emph{индекс} (\num{0}..\num{255}).
+    \item \texttt{dds\_set\_freq}~--- \emph{формула}
+          \emph{для} \emph{расчёта} \emph{шага}.
+\end{itemize}
+
+\begin{warnbox}
+\textbf{Тип \texttt{uint64\_t}!} \emph{Формула}
+\texttt{inc = (freq << 32) / f\_clk}. \emph{При}
+\emph{сдвиге} \num{32}-битного \emph{числа} \emph{на}
+\num{32} \emph{бита}~--- \emph{переполнение}. \emph{Нужен}
+\num{64}-битный \emph{промежуточный} \emph{результат}.
+\emph{Вот} \emph{зачем} \texttt{(uint64\_t)freq\_hz << PHASE\_BITS}.
+\end{warnbox}
+
+\subsection{Переключение формы}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void dds_set_wave(wave_type_t type)
+{
+    if (type < WAVE_COUNT) {
+        current_wave = type;
+    }
+}
+\end{minted}
+\caption{\texttt{dds\_set\_wave()}~--- смена формы}
+\label{lst:dds-set-wave}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{type < WAVE\_COUNT}~--- \emph{проверка}
+          \emph{на} \emph{валидность}.
+    \item \texttt{current\_wave = type}~--- \emph{просто}
+          \emph{меняем} \emph{индекс}. \emph{Следующий}
+          \emph{такт} \emph{DDS} \emph{выдаст} \emph{новую}
+          \emph{форму}.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Переключение} \emph{мгновенное}. \emph{Потому}
+\emph{что} \emph{мы} \emph{не} \emph{перезаписываем}
+\emph{таблицу}~--- \emph{она} \emph{уже} \emph{есть}.
+\emph{Просто} \emph{меняем} \emph{индекс}. \emph{Это}~---
+\emph{сила} DDS.
+\end{keybox}
+
+\section{Уроки главы}
+\label{sec:dds-lessons}
+
+\begin{enumerate}
+    \item \textbf{DDS~--- это способ} \emph{генерировать}
+          \emph{любую} \emph{форму} \emph{через} \emph{таблицу}.
+    \item \textbf{Аккумулятор фазы}~--- \emph{регистр},
+          \emph{который} \emph{хранит} \emph{позицию}.
+    \item \textbf{Частота} \emph{зависит} \emph{от} \emph{шага}
+          (\texttt{inc}): \(f_{out} = f_{clk} \times inc / 2^{32}\).
+    \item \textbf{Любая форма}~--- \emph{если} \emph{есть}
+          \emph{в} \emph{таблице}.
+    \item \textbf{Преимущества}: \emph{точность},
+          \emph{плавность}, \emph{универсальность}.
+    \item \textbf{Переключение формы} \emph{мгновенное}~---
+          \emph{меняем} \emph{индекс}.
+    \item \textbf{Тип \texttt{uint64\_t}~--- обязателен}
+          \emph{для} \emph{расчёта} \emph{шага}.
+    \item \textbf{Точность частоты}~--- \emph{доли} \emph{герца}.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:dds-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли DDS}
+\label{tab:dds-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & Нет \texttt{\#include <math.h>} & Добавить \\
+2 & Переполнение при сдвиге & \texttt{(uint64\_t)} \\
+3 & Нет \texttt{\& PHASE\_MASK} & Добавить \\
+4 & Неверный индекс & \texttt{>> 24} \\
+5 & Нет проверки формы & \texttt{type < WAVE\_COUNT} \\
+6 & Неточная частота & Проверить \texttt{timer\_clk} \\
+7 & Синус <<ступеньками>> & \texttt{sinf()}, не \texttt{sin()} \\
+8 & Нет \texttt{M\_PI} & \texttt{\#define M\_PI} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:dds-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Сколько точек нужно для синуса
+\SI{10}{\kilo\hertz}, чтобы он был \emph{плавным}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Реализуйте \emph{двухполупериодный}
+сигнал. Какие \emph{формулы} нужны?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Что произойдёт, если
+\texttt{phase\_inc = 0}? А если \texttt{phase\_inc = 2\textsuperscript{31}}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Предложите \emph{пользовательскую}
+форму. Как \emph{загрузить} её \emph{с} ПК?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:dds-check}
+
+\begin{enumerate}
+    \item Подключите Nucleo к компьютеру.
+    \item Соберите прошивку (см. главу 2).
+    \item Подключите осциллограф (HANTEK) к выходу \texttt{PA4}.
+    \item Запустите OpenOCD + GDB.
+    \item Посмотрите \emph{форму} сигнала на осциллографе.
+    \item Измените \emph{частоту} через GDB. \emph{Проверьте}
+          на осциллографе.
+    \item Сделайте \emph{скриншот} — \emph{пришлите} в книгу.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли DDS.} Это
+\emph{главное}. Дальше~--- \emph{пользовательские}
+\emph{формы}, \emph{калибровка}, \emph{усилитель}.
+\emph{Всё} \emph{впереди}.
+\end{ideabox}
+
+
