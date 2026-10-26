@@ -1,0 +1,605 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch11-gtk4-basics.tex
+%  Основы GTK4: новый API, виджеты, сигналы
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Основы GTK4}
+\label{ch:gtk4-basics}
+
+\epigraph{<<GTK4~--- это не <<ещё один API>>, а \emph{другой}
+способ думать о виджетах. Проще, но непривычнее>>.}{}
+
+\section{Введение}
+\label{sec:gtk4-intro}
+
+В \texttt{ch01}--\texttt{ch10} мы работали с \emph{железом}:
+STM32, ADC, DMA, DAC. \emph{Теперь}~--- \emph{другая} сторона:
+\textbf{ПК}. \emph{Программа}, которая \emph{управляет}
+осциллографом и генератором.
+
+\textbf{GTK4}~--- это \emph{современная} версия GTK.
+В \emph{первой} книге мы использовали \textbf{GTK3}. GTK4~---
+\emph{другой}. \emph{Некоторые} вещи \emph{проще},
+\emph{некоторые}~--- \emph{сложнее}.
+
+\begin{ideabox}
+\textbf{Аналогия: переезд в новую квартиру.} Вещи \emph{те}
+же, но \emph{расположение} \emph{другое}. \emph{Поначалу}
+\emph{непривычно}, потом~--- \emph{удобнее}.
+GTK4~--- \emph{новая} \emph{квартира} для \emph{старых}
+\emph{виджетов}.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Чем GTK4 \emph{отличается} от GTK3.
+    \item Как \emph{запустить} приложение через \texttt{GtkApplication}.
+    \item Как \emph{создавать} виджеты (\texttt{box}, \texttt{button}, \texttt{label}).
+    \item Как \emph{подключать} сигналы (по-новому).
+    \item Как \emph{рисовать} через \texttt{GtkDrawingArea} и \texttt{Cairo}.
+\end{itemize}
+
+\section{GTK4 vs GTK3}
+\label{sec:gtk4-vs-gtk3}
+
+\textbf{Главные} \emph{изменения}:
+
+\begin{table}[htbp]
+\centering
+\caption{GTK3 vs GTK4}
+\label{tab:gtk4-vs-gtk3}
+\small
+\begin{tabularx}{\textwidth}{@{}l L L@{}}
+\toprule
+\textbf{Что} & \textbf{GTK3} & \textbf{GTK4} \\
+\midrule
+Запуск       & \texttt{gtk\_init()} & \texttt{GtkApplication} \\
+Главный цикл & \texttt{gtk\_main()} & \texttt{g\_application\_run()} \\
+Добавление   & \texttt{gtk\_box\_pack\_start()} & \texttt{gtk\_box\_append()} \\
+Показ        & \texttt{gtk\_widget\_show\_all()} & \texttt{gtk\_widget\_set\_visible()} \\
+Рисование    & \texttt{"draw"} + \texttt{cairo\_t*} & \texttt{gtk\_drawing\_area\_set\_draw\_func()} \\
+Стили        & \texttt{GtkStyleContext} & \texttt{GtkCssProvider} (частично) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{keybox}
+\textbf{Главное изменение~--- \texttt{GtkApplication}.} Вместо
+\emph{глобального} \texttt{gtk\_init()}~--- \emph{объект}
+приложения. Это \emph{позволяет} \emph{интегрироваться}
+с системой (меню, уведомления, D-Bus).
+\end{keybox}
+
+\section{GtkApplication: новый запуск}
+\label{sec:gtk4-application}
+
+\textbf{Старый} \emph{способ} (GTK3):
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+int main(int argc, char *argv[])
+{
+    gtk_init(&argc, &argv);
+    GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_widget_show_all(win);
+    gtk_main();
+    return 0;
+}
+\end{minted}
+\caption{Запуск в GTK3}
+\label{lst:gtk3-main}
+\end{listing}
+
+\textbf{Новый} \emph{способ} (GTK4):
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+static void on_activate(GtkApplication *app, gpointer data)
+{
+    GtkWidget *win = gtk_application_window_new(app);
+    gtk_window_set_title(GTK_WINDOW(win), "Пример");
+    gtk_widget_set_visible(win, TRUE);
+}
+
+int main(int argc, char *argv[])
+{
+    GtkApplication *app = gtk_application_new(
+        "org.example.App", G_APPLICATION_DEFAULT_FLAGS);
+    g_signal_connect(app, "activate",
+                     G_CALLBACK(on_activate), NULL);
+    int status = g_application_run(G_APPLICATION(app),
+                                   argc, argv);
+    g_object_unref(app);
+    return status;
+}
+\end{minted}
+\caption{Запуск в GTK4}
+\label{lst:gtk4-main}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{gtk\_application\_new()}~--- \emph{создаёт}
+          \emph{объект} приложения.
+    \item \texttt{"activate"}~--- \emph{сигнал}, который
+          \emph{вызывается} при \emph{запуске}.
+    \item \texttt{gtk\_application\_window\_new(app)}~---
+          \emph{создаёт} \emph{окно}, \emph{привязанное}
+          к приложению.
+    \item \texttt{g\_application\_run()}~--- \emph{главный}
+          \emph{цикл}.
+\end{itemize}
+
+\begin{ideabox}
+\textbf{Зачем \texttt{GtkApplication}?} Чтобы \emph{приложение}
+было \emph{уникальным}. Если \emph{запустить} \emph{второй}
+\emph{экземпляр}~--- \emph{он} \emph{передаст}
+\emph{управление} \emph{первому}, а \emph{не} \emph{откроет}
+\emph{новое} \emph{окно}.
+\end{ideabox}
+
+\section{Виджеты}
+\label{sec:gtk4-widgets}
+
+Виджеты \emph{те} \emph{же}, но \emph{API} \emph{другое}.
+
+\subsection{Box}
+
+\textbf{GTK3}:
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
+gtk_box_pack_start(GTK_BOX(box), button, FALSE, FALSE, 0);
+\end{minted}
+
+\textbf{GTK4}:
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+gtk_box_append(GTK_BOX(box), label);
+gtk_box_append(GTK_BOX(box), button);
+\end{minted}
+
+\begin{keybox}
+\textbf{Главное изменение:} вместо \texttt{pack\_start}
+\emph{с} \emph{флагами}~--- просто \texttt{append}. \emph{Меньше}
+\emph{параметров}, \emph{проще} \emph{код}.
+\end{keybox}
+
+\subsection{Button}
+
+\textbf{GTK3}:
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+GtkWidget *btn = gtk_button_new_with_label("OK");
+g_signal_connect(btn, "clicked",
+                 G_CALLBACK(on_clicked), data);
+\end{minted}
+
+\textbf{GTK4}:
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+GtkWidget *btn = gtk_button_new_with_label("OK");
+g_signal_connect(btn, "clicked",
+                 G_CALLBACK(on_clicked), data);
+\end{minted}
+
+\begin{notebox}
+\textbf{Сигналы \emph{не} \emph{изменились}.} \texttt{"clicked"}
+\emph{работает} \emph{так} \emph{же}. \emph{Но} \emph{есть}
+\emph{новые} \emph{сигналы} (например, \texttt{"activate"}).
+\end{notebox}
+
+\subsection{Label}
+
+\textbf{GTK3}:
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+GtkWidget *lbl = gtk_label_new("Hello");
+gtk_label_set_text(GTK_LABEL(lbl), "World");
+\end{minted}
+
+\textbf{GTK4}:
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+GtkWidget *lbl = gtk_label_new("Hello");
+gtk_label_set_text(GTK_LABEL(lbl), "World");
+\end{minted}
+
+\begin{notebox}
+\textbf{Label \emph{не} \emph{изменился}.} \emph{Всё} \emph{то}
+\emph{же} \emph{API}. \emph{Это}~--- \emph{хорошо}.
+\end{notebox}
+
+\section{Сигналы и колбэки}
+\label{sec:gtk4-signals}
+
+Сигналы~--- \emph{те} \emph{же}. \emph{Но} \emph{есть}
+\emph{новые}:
+\begin{itemize}
+    \item \texttt{"activate"}~--- \emph{приложение}
+          \emph{запущено}.
+    \item \texttt{"close-request"}~--- \emph{окно}
+          \emph{закрывается}.
+    \item \texttt{"destroy"}~--- \emph{окно}
+          \emph{уничтожено}.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Главное} \emph{изменение} \emph{в} \emph{колбэках}~---
+\texttt{GtkWidget*} \emph{заменён} \emph{на} \emph{более}
+\emph{конкретные} \emph{типы} (\texttt{GtkButton*},
+\texttt{GtkWindow*}). \emph{Это}~--- \emph{лучше}
+\emph{типизация}.
+\end{keybox}
+
+\section{GtkDrawingArea и Cairo}
+\label{sec:gtk4-drawing}
+
+\textbf{GTK3}:
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+g_signal_connect(area, "draw",
+                 G_CALLBACK(on_draw), data);
+
+gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_paint(cr);
+    return FALSE;
+}
+\end{minted}
+
+\textbf{GTK4}:
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+gtk_drawing_area_set_draw_func(
+    GTK_DRAWING_AREA(area), on_draw, data, NULL);
+
+void on_draw(GtkDrawingArea *area, cairo_t *cr,
+             int width, int height, gpointer data)
+{
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_paint(cr);
+}
+\end{minted}
+
+\begin{keybox}
+\textbf{Главное} \emph{изменение}: \emph{вместо} \emph{сигнала}
+\texttt{"draw"}~--- \emph{функция}
+\texttt{gtk\_drawing\_area\_set\_draw\_func()}. \emph{И}
+\emph{колбэк} \emph{получает} \emph{размеры} \emph{виджета}
+(\texttt{width}, \texttt{height}).
+\end{keybox}
+
+
+
+%%%%%%========================
+
+
+
+\section{Полный пример: окно с кнопкой}
+\label{sec:gtk4-example}
+
+\textbf{Теперь}~--- \emph{полный} \emph{пример}. \emph{Окно},
+\emph{кнопка}, \emph{label}. \emph{Нажимаем} \emph{кнопку}~---
+\emph{меняется} \emph{текст}.
+
+\subsection{Код}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+#include <gtk/gtk.h>
+
+static void on_button_clicked(GtkButton *btn, gpointer data)
+{
+    GtkLabel *label = GTK_LABEL(data);
+    static int count = 0;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Нажато: %d", ++count);
+    gtk_label_set_text(label, buf);
+}
+
+static void on_activate(GtkApplication *app, gpointer data)
+{
+    GtkWidget *win = gtk_application_window_new(app);
+    gtk_window_set_title(GTK_WINDOW(win), "Пример GTK4");
+    gtk_window_set_default_size(GTK_WINDOW(win), 400, 300);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_margin_top(box, 20);
+    gtk_widget_set_margin_bottom(box, 20);
+    gtk_widget_set_margin_start(box, 20);
+    gtk_widget_set_margin_end(box, 20);
+    gtk_window_set_child(GTK_WINDOW(win), box);
+
+    GtkWidget *label = gtk_label_new("Нажмите кнопку");
+    gtk_box_append(GTK_BOX(box), label);
+
+    GtkWidget *button = gtk_button_new_with_label("Нажми меня");
+    g_signal_connect(button, "clicked",
+                     G_CALLBACK(on_button_clicked), label);
+    gtk_box_append(GTK_BOX(box), button);
+
+    gtk_widget_set_visible(win, TRUE);
+}
+
+int main(int argc, char *argv[])
+{
+    GtkApplication *app = gtk_application_new(
+        "org.example.Gtk4Demo", G_APPLICATION_DEFAULT_FLAGS);
+    g_signal_connect(app, "activate",
+                     G_CALLBACK(on_activate), NULL);
+    int status = g_application_run(G_APPLICATION(app),
+                                   argc, argv);
+    g_object_unref(app);
+    return status;
+}
+\end{minted}
+\caption{Полный пример GTK4: окно, кнопка, label}
+\label{lst:gtk4-example}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{gtk\_window\_set\_child()}~--- \emph{новый}
+          \emph{способ} \emph{добавить} \emph{ребёнка}
+          \emph{в} \emph{окно}.
+    \item \texttt{gtk\_box\_append()}~--- \emph{добавить}
+          \emph{виджет} \emph{в} \emph{box}.
+    \item \texttt{gtk\_widget\_set\_margin\_*}~--- \emph{отступы}
+          \emph{от} \emph{краёв}.
+    \item \texttt{gtk\_widget\_set\_visible(win, TRUE)}~---
+          \emph{показать} \emph{окно}.
+\end{itemize}
+
+\subsection{Сборка}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+gcc -o demo demo.c `pkg-config --cflags --libs gtk4`
+./demo
+\end{minted}
+\caption{Компиляция и запуск}
+\label{lst:gtk4-build}
+\end{listing}
+
+\begin{keybox}
+\textbf{Команда \texttt{pkg-config}.} \texttt{--cflags}~---
+\emph{флаги} \emph{компиляции} (\texttt{-I...}). \texttt{--libs}~---
+\emph{флаги} \emph{линковки} (\texttt{-lgtk-4 ...}). \emph{Если}
+\emph{не} \emph{хотите} \emph{писать} \emph{вручную}~---
+\emph{используйте} \texttt{pkg-config}.
+\end{keybox}
+
+\section{Код для нашего проекта}
+\label{sec:gtk4-project}
+
+\textbf{Теперь}~--- \emph{код}, \emph{который} \emph{будет}
+\emph{в} \emph{нашем} \emph{проекте}. \emph{Это}~---
+\emph{заготовка} \emph{для} \emph{осциллографа}.
+
+\subsection{Структура}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+typedef struct {
+    GtkWidget *window;
+    GtkWidget *drawing_area;
+    GtkWidget *status_label;
+    GtkWidget *btn_start;
+    GtkWidget *btn_stop;
+    // ...
+} AppData;
+\end{minted}
+\caption{Структура \texttt{AppData}}
+\label{lst:gtk4-appdata}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{AppData}~--- \emph{всё} \emph{состояние}
+          \emph{приложения}.
+    \item \texttt{drawing\_area}~--- \emph{место} \emph{для}
+          \emph{осциллограммы}.
+    \item \texttt{status\_label}~--- \emph{статус} \emph{внизу}.
+\end{itemize}
+
+\subsection{Активация}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+static void on_activate(GtkApplication *app, gpointer data)
+{
+    AppData *st = data;
+
+    st->window = gtk_application_window_new(app);
+    gtk_window_set_title(GTK_WINDOW(st->window),
+                         "STM32 Oscilloscope");
+    gtk_window_set_default_size(GTK_WINDOW(st->window),
+                                800, 600);
+
+    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+    gtk_window_set_child(GTK_WINDOW(st->window), vbox);
+
+    // Кнопки
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+    gtk_box_append(GTK_BOX(vbox), hbox);
+
+    st->btn_start = gtk_button_new_with_label("Старт");
+    g_signal_connect(st->btn_start, "clicked",
+                     G_CALLBACK(on_start_clicked), st);
+    gtk_box_append(GTK_BOX(hbox), st->btn_start);
+
+    st->btn_stop = gtk_button_new_with_label("Стоп");
+    g_signal_connect(st->btn_stop, "clicked",
+                     G_CALLBACK(on_stop_clicked), st);
+    gtk_box_append(GTK_BOX(hbox), st->btn_stop);
+
+    // Область рисования
+    st->drawing_area = gtk_drawing_area_new();
+    gtk_widget_set_size_request(st->drawing_area, -1, 300);
+    gtk_drawing_area_set_draw_func(
+        GTK_DRAWING_AREA(st->drawing_area),
+        on_draw, st, NULL);
+    gtk_box_append(GTK_BOX(vbox), st->drawing_area);
+
+    // Статус
+    st->status_label = gtk_label_new("Готов");
+    gtk_box_append(GTK_BOX(vbox), st->status_label);
+
+    gtk_widget_set_visible(st->window, TRUE);
+}
+\end{minted}
+\caption{\texttt{on\_activate()} для проекта}
+\label{lst:gtk4-activate}
+\end{listing}
+
+\subsection{Рисование}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+static void on_draw(GtkDrawingArea *area, cairo_t *cr,
+                    int width, int height, gpointer data)
+{
+    AppData *st = data;
+
+    // Фон
+    cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
+    cairo_paint(cr);
+
+    // Сетка
+    cairo_set_source_rgb(cr, 0.3, 0.3, 0.3);
+    cairo_set_line_width(cr, 0.5);
+    for (int i = 0; i < width; i += 50) {
+        cairo_move_to(cr, i, 0);
+        cairo_line_to(cr, i, height);
+    }
+    for (int i = 0; i < height; i += 50) {
+        cairo_move_to(cr, 0, i);
+        cairo_line_to(cr, width, i);
+    }
+    cairo_stroke(cr);
+
+    // Сигнал (пример)
+    cairo_set_source_rgb(cr, 0.2, 1.0, 0.2);
+    cairo_set_line_width(cr, 2);
+    for (int i = 0; i < width; i++) {
+        double x = i;
+        double y = height / 2.0
+                 + 100.0 * sin(i * 0.05);
+        if (i == 0) cairo_move_to(cr, x, y);
+        else        cairo_line_to(cr, x, y);
+    }
+    cairo_stroke(cr);
+}
+\end{minted}
+\caption{\texttt{on\_draw()}~--- рисование осциллограммы}
+\label{lst:gtk4-draw}
+\end{listing}
+
+\textbf{Что здесь важно}:
+\begin{itemize}
+    \item \texttt{cairo\_set\_source\_rgb()}~--- \emph{цвет}.
+    \item \texttt{cairo\_paint()}~--- \emph{заливка} \emph{фона}.
+    \item \texttt{cairo\_move\_to()} / \texttt{cairo\_line\_to()}~---
+          \emph{линии} \emph{сетки}.
+    \item \texttt{cairo\_stroke()}~--- \emph{нарисовать}.
+    \item \texttt{sin()}~--- \emph{пример} \emph{сигнала}.
+\end{itemize}
+
+\begin{keybox}
+\textbf{Почему \texttt{sin(i * 0.05)}?} Это \emph{простой}
+\emph{способ} \emph{нарисовать} \emph{синус} \emph{без}
+\emph{данных}. \emph{Позже}~--- \emph{заменим} \emph{на}
+\emph{реальные} \emph{данные} \emph{из} \emph{порта}.
+\end{keybox}
+
+\section{Уроки главы}
+\label{sec:gtk4-lessons}
+
+\begin{enumerate}
+    \item \textbf{GTK4~--- \emph{другая} \emph{квартира}.}
+          Вещи \emph{те} \emph{же}, \emph{API} \emph{другое}.
+    \item \textbf{Запуск~--- через \texttt{GtkApplication}.}
+          \emph{Уникальность} \emph{приложения}.
+    \item \textbf{Виджеты~--- \emph{проще}.} \texttt{append}
+          \emph{вместо} \texttt{pack\_start}.
+    \item \textbf{Сигналы~--- \emph{те} \emph{же}.}
+          \emph{Но} \emph{новые} \emph{типы}.
+    \item \textbf{Рисование~--- через
+          \texttt{set\_draw\_func}}. \emph{Колбэк}
+          \emph{получает} \emph{размеры}.
+    \item \textbf{\texttt{AppData}~--- состояние}. \emph{Всё}
+          \emph{в} \emph{одной} \emph{структуре}.
+    \item \textbf{Cairo~--- тот} \emph{же}. \emph{Методы}
+          \emph{не} \emph{изменились}.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:gtk4-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли GTK4}
+\label{tab:gtk4-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & \texttt{gtk\_init} не работает & \texttt{GtkApplication} \\
+2 & Нет окна & \texttt{gtk\_widget\_set\_visible} \\
+3 & \texttt{pack\_start} не найден & \texttt{gtk\_box\_append} \\
+4 & \texttt{show\_all} не работает & \texttt{set\_visible} \\
+5 & Нет рисования & \texttt{set\_draw\_func} \\
+6 & Нет размера в draw & \emph{Колбэк} \emph{получает} \texttt{width}, \texttt{height} \\
+7 & Нет \texttt{pkg-config} & \texttt{--cflags --libs gtk4} \\
+8 & Не видно окна & \emph{Проверить} \texttt{set\_visible} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:gtk4-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Соберите \emph{пример} из
+\cref{lst:gtk4-example}. \emph{Запустите}. \emph{Нажмите}
+\emph{кнопку}. \emph{Что} \emph{произошло}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Добавьте \emph{вторую} \emph{кнопку}
+(<<Сброс>>). \emph{При} \emph{нажатии}~--- \emph{счётчик}
+\emph{обнуляется}. \emph{Как} \emph{связать} \emph{кнопки}?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Измените \emph{цвет} \emph{фона}
+\emph{и} \emph{сетки} \emph{в} \texttt{on\_draw()}.
+\emph{Как} \emph{сделать} \emph{сетку} \emph{более}
+\emph{заметной}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Добавьте \emph{слайдер}
+(\texttt{GtkScale}) \emph{для} \emph{частоты}. \emph{При}
+\emph{изменении}~--- \emph{меняется} \emph{частота}
+\emph{сигнала}. \emph{Какой} \emph{сигнал} \emph{использовать}?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:gtk4-check}
+
+\begin{enumerate}
+    \item Соберите \emph{пример} \emph{из}
+          \cref{lst:gtk4-example}.
+    \item \emph{Запустите}. \emph{Нажмите} \emph{кнопку}.
+    \item \emph{Убедитесь}, что \emph{счётчик} \emph{работает}.
+    \item \emph{Измените} \emph{цвет} \emph{фона} \emph{на} \emph{белый}.
+    \item \emph{Сделайте} \emph{скриншот}~--- \emph{пришлите}
+          \emph{в} \emph{книгу}.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли GTK4.} Это
+\emph{главное}. Дальше~--- \emph{потоки} \emph{и} \emph{данные}
+\emph{из} \emph{порта}. \emph{Самое} \emph{интересное}~---
+\emph{впереди}.
+\end{ideabox}
+
+
