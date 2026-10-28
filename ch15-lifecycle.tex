@@ -1,0 +1,557 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch15-lifecycle.tex
+%  Жизненный цикл ПК-приложения
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Жизненный цикл приложения}
+\label{ch:lifecycle}
+
+\epigraph{<<Хорошая программа не только хорошо работает.
+Она ещё и правильно запускается, и правильно завершается>>.}{}
+
+\section{Введение}
+\label{sec:lifecycle-intro}
+
+В \texttt{ch12}--\texttt{ch14} мы разобрали \emph{потоки},
+\emph{отрисовку}, \emph{интерфейс} \emph{генератора}. \emph{Но}
+\emph{осталось} \emph{главное}~--- \emph{как} \emph{всё} \emph{это}
+\emph{запустить} \emph{и} \emph{остановить} \emph{правильно}.
+
+\textbf{Жизненный цикл}~--- \emph{это} \emph{порядок}. \emph{От}
+\emph{первого} \emph{вызова} \texttt{main()} \emph{до}
+\emph{последнего} \texttt{return 0}.
+
+\begin{ideabox}
+\textbf{Жизненный цикл~--- это \emph{порядок}.} \emph{Есть}
+\emph{правильный} \emph{порядок} \emph{инициализации} \emph{и}
+\emph{правильный} \emph{порядок} \emph{завершения}. \emph{Если}
+\emph{нарушить}~--- \emph{будут} \emph{странные} \emph{баги}:
+\emph{утечки}, \emph{зависания}, \emph{<<плавающие>>} \emph{ошибки}.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Что делает \texttt{main()}.
+    \item В каком порядке инициализируются модули.
+    \item Почему \texttt{app\_data\_free}~--- не <<просто
+          освобождение памяти>>.
+    \item Как правильно останавливать таймеры.
+    \item Почему \texttt{delete-event} и \texttt{destroy}~---
+          разные вещи.
+    \item Что произойдёт, если \emph{нарушить} порядок.
+\end{itemize}
+
+\section{Точка входа: \texttt{main()}}
+\label{sec:lifecycle-main}
+
+\texttt{main.c}~--- это самый маленький файл проекта.
+В нём всего 30 строк. Но каждая строка — важна.
+Здесь задаётся порядок всей жизни приложения.
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+int main(int argc, char *argv[])
+{
+    debug_log_init();
+    LOG_DEBUG("=== ПРОГРАММА ЗАПУЩЕНА ===");
+
+    gtk_init(&argc, &argv);
+
+    AppData app;
+    app_data_init(&app);
+    load_settings(&app);
+
+    ui_create(&app);
+    scan_serial_ports(&app);
+
+    gtk_widget_show_all(app.window);
+    gtk_main();
+
+    save_settings(&app);
+    app_data_free(&app);
+
+    LOG_DEBUG("=== ПРОГРАММА ЗАВЕРШЕНА ===");
+    return 0;
+}
+\end{minted}
+\caption{\texttt{main()}~--- точка входа}
+\label{lst:lifecycle-main}
+\end{listing}
+
+\subsection{Порядок вызовов}
+
+\textbf{Одиннадцать строк} — одиннадцать решений.
+Порядок не случаен:
+
+\begin{enumerate}
+    \item \texttt{debug\_log\_init()}~--- до всего.
+          Если \texttt{gtk\_init} упадёт~--- мы хотим
+          знать почему. Значит, лог должен работать
+          раньше GTK.
+    \item \texttt{gtk\_init()}~--- инициализация GTK.
+          Без неё нельзя создавать виджеты.
+    \item \texttt{app\_data\_init()}~--- обнуление
+          структуры \texttt{AppData}. Все поля — нули,
+          \texttt{fd} = $-1$, буферы пусты.
+    \item \texttt{load\_settings()}~--- чтение конфига.
+          Заполняет \texttt{last\_device}, \texttt{auto\_reconnect}.
+    \item \texttt{ui\_create()}~--- создание всех
+          виджетов. Устанавливает \texttt{ui\_alive = TRUE}
+          в конце.
+    \item \texttt{scan\_serial\_ports()}~--- первое
+          сканирование портов.
+    \item \texttt{gtk\_widget\_show\_all()}~--- показ
+          окна.
+    \item \texttt{gtk\_main()}~--- главный цикл.
+          Блокирует управление.
+    \item \texttt{save\_settings()}~--- сохранение
+          после выхода из главного цикла.
+    \item \texttt{app\_data\_free()}~--- освобождение
+          ресурсов.
+    \item \texttt{return 0}~--- выход.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Порядок инициализации~--- от \emph{общего} к \emph{частному}.}
+Сначала~--- лог и GTK (инфраструктура). Потом~--- состояние
+(\texttt{AppData}). Потом~--- конфиг. Потом~--- UI. Наконец~---
+сканирование портов.
+\end{keybox}
+
+\begin{notebox}
+\textbf{Порядок завершения~--- \emph{обратный} порядку
+инициализации.} Сначала~--- сохраняем настройки. Потом~---
+освобождаем ресурсы. Именно так: \emph{что} создали
+\emph{последним}~--- освобождаем \emph{первым}.
+\end{notebox}
+
+\section{Инициализация: \texttt{app\_data\_init()}}
+\label{sec:lifecycle-init}
+
+Структура \texttt{AppData}~--- это всё состояние приложения.
+Перед использованием её нужно обнулить.
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void app_data_init(AppData *app)
+{
+    memset(app, 0, sizeof(*app));
+    app->fd = -1;
+    app->auto_read_active = FALSE;
+    app->is_connected = FALSE;
+    plot_data_init(&app->plot_data);
+    line_buffer_init(&app->line_buffer);
+    g_mutex_init(&app->ring.lock);
+}
+\end{minted}
+\caption{\texttt{app\_data\_init()}}
+\label{lst:lifecycle-init}
+\end{listing}
+
+\subsection{Что происходит}
+
+\textbf{Четыре шага:}
+
+\begin{enumerate}
+    \item \texttt{memset(app, 0, ...)}~--- обнуляем
+          всю структуру. Все указатели становятся
+          \texttt{NULL}, все числа~--- нулями.
+    \item \texttt{app->fd = -1}~--- особый случай.
+          По соглашению \texttt{fd < 0} означает
+          <<порт не открыт>>. \texttt{memset} даст
+          \texttt{fd = 0}~--- но это валидный файловый
+          дескриптор! Поэтому явно ставим $-1$.
+    \item \texttt{plot\_data\_init} и \texttt{line\_buffer\_init}~---
+          инициализация вложенных структур.
+    \item \texttt{g\_mutex\_init}~--- мьютекс для кольца
+          кадров. Без него~--- гонка данных.
+\end{enumerate}
+
+\begin{warnbox}
+\textbf{\texttt{fd = -1}~--- это \emph{соглашение}.} Если
+забыть~--- \texttt{close\_serial\_port} может попытаться
+закрыть \texttt{fd = 0} (что \emph{валидно}~--- но \emph{чужой}
+дескриптор). Это приведёт к странным багам: <<порт закрыт,
+а stdin тоже пропал>>.
+\end{warnbox}
+
+\begin{ideabox}
+\textbf{Инициализация~--- это \emph{подготовка}, а не
+\emph{настройка}.} Мы не \emph{задаём} \emph{рабочие}
+значения~--- мы делаем структуру \emph{безопасной} для
+\emph{последующего} использования. \emph{Реальные} значения
+придут потом: из \texttt{load\_settings}, из
+\texttt{open\_serial\_port}.
+\end{ideabox}
+
+\section{Загрузка настроек}
+\label{sec:lifecycle-load}
+
+\texttt{load\_settings()} вызывается сразу после
+\texttt{app\_data\_init}. Она читает конфиг-файл
+и заполняет поля \texttt{AppData}.
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void load_settings(AppData *app)
+{
+    char *path = config_path();
+    GKeyFile *kf = g_key_file_new();
+
+    if (!g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, NULL)) {
+        app->auto_reconnect = TRUE;
+        app->last_device[0] = '\0';
+        return;
+    }
+    // ... чтение ключей ...
+}
+\end{minted}
+\caption{\texttt{load\_settings()}~--- загрузка}
+\label{lst:lifecycle-load}
+\end{listing}
+
+\subsection{Значения по умолчанию}
+
+\textbf{Первый запуск}~--- конфига нет. Это нормально.
+Приложение должно работать без него.
+
+\begin{keybox}
+\textbf{Три сценария:}
+\begin{itemize}
+    \item \textbf{Конфиг есть}~--- читаем.
+    \item \textbf{Конфига нет}~--- значения по умолчанию.
+    \item \textbf{Конфиг повреждён}~--- значения по умолчанию.
+\end{itemize}
+Все три должны приводить к \emph{работоспособному} приложению.
+\end{keybox}
+
+\section{Создание UI}
+\label{sec:lifecycle-ui}
+
+\texttt{ui\_create()}~--- самая большая функция.
+Она создаёт все виджеты и связывает их
+с колбэками.
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+void ui_create(AppData *app)
+{
+    app->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    // ... создание всех виджетов ...
+
+    g_signal_connect(app->window, "delete-event",
+                     G_CALLBACK(on_window_delete), app);
+    g_signal_connect(app->window, "destroy",
+                     G_CALLBACK(on_window_destroy), app);
+
+    // ... создание панелей ...
+
+    app->ui_alive = TRUE;
+}
+\end{minted}
+\caption{\texttt{ui\_create()}}
+\label{lst:lifecycle-ui}
+\end{listing}
+
+\subsection{Два сигнала на закрытие окна}
+
+Обратите внимание: мы подключаем два разных
+обработчика на закрытие окна.
+
+\begin{itemize}
+    \item \texttt{"delete-event"}~--- пользователь
+          нажал крестик.
+    \item \texttt{"destroy"}~--- окно уничтожается.
+\end{itemize}
+
+Это не дублирование~--- это разные моменты.
+Между ними GTK уничтожает виджеты.
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    box/.style={
+        draw, rounded corners=2mm, thick,
+        minimum width=7cm, minimum height=0.8cm,
+        align=center, font=\small
+    },
+    event/.style={box, fill=clrUIData!20},
+    callback/.style={box, fill=clrLogicData!20},
+    arr/.style={-{Latex[length=3mm]}, thick}
+]
+
+% ─── Координатная сетка (для отладки) ────────────
+\draw[step=1cm, gray!20, very thin] (-1, -9) grid (10, 1);
+
+\node[event]    (click)  at (4, 0)    {Пользователь жмёт крестик};
+\node[event]    (delete) at (4, -1.2) {GTK посылает <<delete-event>>};
+\node[callback] (cb1)    at (4, -2.4) {on\_window\_delete()};
+\node[event]    (dw)     at (4, -3.6) {GTK уничтожает виджеты};
+\node[event]    (destroy) at (4, -4.8) {GTK посылает <<destroy>>};
+\node[callback] (cb2)    at (4, -6.0) {on\_window\_destroy()};
+\node[event]    (end)    at (4, -7.2) {main() продолжается};
+
+\draw[arr] (click)   -- (delete);
+\draw[arr] (delete)  -- (cb1);
+\draw[arr] (cb1)     -- (dw);
+\draw[arr] (dw)      -- (destroy);
+\draw[arr] (destroy) -- (cb2);
+\draw[arr] (cb2)     -- (end);
+
+% Метки осей (для отладки)
+\foreach \x in {-1,...,10} {
+    \node[font=\tiny, gray] at (\x, -9.3) {\x};
+}
+\foreach \y in {-9,...,1} {
+    \node[font=\tiny, gray] at (-1.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Жизненный цикл окна при закрытии.}
+\label{fig:lifecycle-window}
+\end{figure}
+
+\section{Завершение: \texttt{app\_data\_free()}}
+\label{sec:lifecycle-free}
+
+\texttt{app\_data\_free()}~--- это зеркало
+\texttt{app\_data\_init}. Она освобождает всё,
+что было создано.
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void app_data_free(AppData *app)
+{
+    stop_auto_reconnect(app);
+
+    if (app->redraw_timer_id) {
+        g_source_remove(app->redraw_timer_id);
+        app->redraw_timer_id = 0;
+    }
+
+    if (app->osc_thread) {
+        app->thread_running = false;
+        g_thread_join(app->osc_thread);
+        app->osc_thread = NULL;
+    }
+
+    app->ui_alive = FALSE;
+    close_serial_port(app);
+
+    g_mutex_clear(&app->ring.lock);
+}
+\end{minted}
+\caption{\texttt{app\_data\_free()}}
+\label{lst:lifecycle-free}
+\end{listing}
+
+\subsection{Порядок остановки}
+
+\textbf{Порядок}~--- критичен:
+
+\begin{enumerate}
+    \item \texttt{stop\_auto\_reconnect()}~--- сначала
+          останавливаем таймер реконнекта. Иначе
+          он может сработать после того, как
+          мы уничтожим \texttt{AppData}.
+    \item \texttt{g\_source\_remove(redraw\_timer\_id)}~---
+          останавливаем таймер перерисовки.
+          Тот же принцип.
+    \item \texttt{g\_thread\_join()}~--- останавливаем
+          поток чтения. Пока он работает~---
+          нельзя освобождать кольцо.
+    \item \texttt{app->ui\_alive = FALSE}~--- помечаем UI
+          мёртвым. Это защита для \texttt{close\_serial\_port}.
+    \item \texttt{close\_serial\_port()}~--- закрываем
+          порт последним.
+    \item \texttt{g\_mutex\_clear}~--- освобождаем мьютекс.
+\end{enumerate}
+
+\begin{warnbox}
+\textbf{Порядок остановки~--- \emph{обратный} порядку
+создания.} Что \emph{создали} \emph{последним}~--- останавливаем
+\emph{первым}. Что \emph{создали} \emph{первым}~---
+останавливаем \emph{последним}.
+\end{warnbox}
+
+\section{Полный жизненный цикл}
+\label{sec:lifecycle-full}
+
+Соберём всё вместе: запуск, работа,
+завершение.
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    box/.style={
+        draw, rounded corners=1.5mm, thick,
+        minimum width=4.5cm, minimum height=0.8cm,
+        align=center, font=\footnotesize\ttfamily,
+        fill=white
+    },
+    phase/.style={
+        draw, rounded corners=3mm, thick,
+        minimum width=3cm, minimum height=0.8cm,
+        align=center, font=\small\bfseries,
+        fill=clrIdea!10
+    },
+    arr/.style={-{Latex[length=3mm]}, thick}
+]
+
+% ─── Координатная сетка (для отладки) ────────────
+\draw[step=1cm, gray!20, very thin] (-1, -19) grid (10, 1);
+
+% Запуск
+\node[phase] (start) at (4, 0) {ЗАПУСК};
+\node[box, below=of start] (init) {app\_data\_init()};
+\node[box, below=of init] (load) {load\_settings()};
+\node[box, below=of load] (ui) {ui\_create()};
+\node[box, below=of ui] (scan) {scan\_serial\_ports()};
+\node[box, below=of scan] (show) {gtk\_widget\_show\_all()};
+
+% Работа
+\node[phase, below=1cm of show] (run) {РАБОТА};
+\node[box, below=of run] (main) {gtk\_main()};
+
+% Завершение
+\node[phase, below=1cm of main] (end) {ЗАВЕРШЕНИЕ};
+\node[box, below=of end] (save) {save\_settings()};
+\node[box, below=of save] (free) {app\_data\_free()};
+
+\draw[arr] (start) -- (init);
+\draw[arr] (init) -- (load);
+\draw[arr] (load) -- (ui);
+\draw[arr] (ui) -- (scan);
+\draw[arr] (scan) -- (show);
+\draw[arr] (show) -- (run);
+\draw[arr] (run) -- (main);
+\draw[arr] (main) -- (end);
+\draw[arr] (end) -- (save);
+\draw[arr] (save) -- (free);
+
+% Метки осей (для отладки)
+\foreach \x in {-1,...,10} {
+    \node[font=\tiny, gray] at (\x, -19.3) {\x};
+}
+\foreach \y in {-19,...,1} {
+    \node[font=\tiny, gray] at (-1.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Полный жизненный цикл приложения.}
+\label{fig:lifecycle-full}
+\end{figure}
+
+\subsection{Три фазы}
+
+\begin{enumerate}
+    \item \textbf{Запуск}~--- от \texttt{main()} до
+          \texttt{gtk\_widget\_show\_all}. \emph{Создаём}
+          всё: состояние, UI, таймеры.
+    \item \textbf{Работа}~--- \texttt{gtk\_main()}.
+          Обработка событий: клики, таймеры, данные из порта.
+          Пока пользователь не закроет окно~---
+          \texttt{gtk\_main} \emph{не вернёт} управление.
+    \item \textbf{Завершение}~--- от \texttt{save\_settings}
+          до \texttt{return 0}. \emph{Освобождаем}
+          всё в \emph{обратном} порядке.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{\texttt{gtk\_main()}~--- это <<сердце>> приложения.}
+Он \emph{блокирует} управление. Всё, что происходит
+\emph{во время} работы, происходит \emph{внутри}
+\texttt{gtk\_main}~--- через \emph{колбэки}.
+\end{keybox}
+
+\section{Уроки главы}
+\label{sec:lifecycle-lessons}
+
+\begin{enumerate}
+    \item \textbf{Порядок инициализации~--- от общего
+          к частному.} Лог, GTK, состояние, конфиг, UI.
+    \item \textbf{Порядок завершения~--- обратный.}
+          Конфиг, состояние, GTK.
+    \item \textbf{\texttt{app\_data\_init}~--- не <<просто
+          memset>>.} \texttt{fd = -1}~--- \emph{соглашение}.
+    \item \textbf{Приложение должно работать без конфига.}
+          Первый запуск~--- конфига нет. Это нормально.
+    \item \textbf{Два сигнала на закрытие окна~--- не
+          дублирование.} \texttt{delete-event}~--- \emph{до}
+          уничтожения виджетов, \texttt{destroy}~--- \emph{после}.
+    \item \textbf{Таймеры~--- первыми.} \texttt{app\_data\_free}
+          сначала останавливает таймеры, потом~--- порт.
+    \item \textbf{\texttt{gtk\_main}~--- сердце приложения.}
+          Всё происходит внутри него.
+    \item \textbf{Потоки~--- до освобождения памяти.}
+          \texttt{g\_thread\_join} перед \texttt{g\_mutex\_clear}.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:lifecycle-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли жизненного цикла}
+\label{tab:lifecycle-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & \texttt{debug\_log\_init} после \texttt{gtk\_init} & До~--- иначе ошибки GTK потеряются \\
+2 & \texttt{fd = 0} по умолчанию & Явно ставить $-1$ в \texttt{app\_data\_init} \\
+3 & Приложение падает без конфига & Значения по умолчанию \\
+4 & Закрытие порта в \texttt{destroy} & В \texttt{delete-event} \\
+5 & Таймеры работают после \texttt{app\_data\_free} & Остановить \emph{до} освобождения \\
+6 & \texttt{save\_settings} до \texttt{gtk\_main} & После~--- иначе нечего сохранять \\
+7 & \texttt{app\_data\_free} без \texttt{close\_serial\_port} & Обязательно закрыть порт \\
+8 & Поток работает после \texttt{g\_mutex\_clear} & \texttt{g\_thread\_join} \emph{до} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:lifecycle-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Что произойдёт, если поменять местами
+\texttt{gtk\_init} и \texttt{debug\_log\_init} в \texttt{main}?
+Приведите сценарий, в котором это приведёт к потере
+информации.
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Добавьте в \texttt{main} обработку
+аргументов командной строки: флаг \texttt{--port /dev/ttyUSB0}
+для автоматического подключения. Как это повлияет на
+\texttt{load\_settings}?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Реализуйте корректную обработку
+\texttt{SIGINT} (Ctrl+C из терминала). Что должно произойти
+до выхода? Как связать сигнал с \texttt{gtk\_main\_quit}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Что произойдёт, если \texttt{app\_data\_free}
+вызывается \emph{до} \texttt{gtk\_main}? Приведите пример,
+когда это \emph{допустимо}.
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 5.} Нарисуйте (на бумаге или в TikZ) полный
+жизненный цикл \emph{вашего} приложения. Какие модули в каком
+порядке инициализируются и освобождаются?
+\end{exercisebox}
+
+
