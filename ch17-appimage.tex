@@ -1,0 +1,286 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch17-appimage.tex
+%  AppImage: упаковка приложения для Linux
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{AppImage: упаковка приложения}
+\label{ch:appimage}
+
+\epigraph{<<AppImage~--- это способ сказать пользователю:
+<<Запусти~--- и всё заработает>>. Без установки, без зависимостей>>.}{}
+
+\section{Введение}
+\label{sec:appimage-intro}
+
+В \texttt{ch16} мы \emph{отладили} приложение. Оно \emph{работает}
+\emph{на} \emph{нашей} \emph{машине}. Но \emph{что}, \emph{если}
+\emph{пользователь} \emph{хочет} \emph{запустить} \emph{его} \emph{на}
+\emph{своей} \emph{системе}? \emph{У} \emph{него} \emph{может} \emph{не}
+\emph{быть} \emph{GTK4}, \emph{GLib} \emph{нужной} \emph{версии},
+\emph{правильных} \emph{библиотек}.
+
+\textbf{Решение}~--- \textbf{AppImage}. \emph{Один} \emph{файл},
+\emph{который} \emph{содержит} \emph{всё}: \emph{бинарник},
+\emph{библиотеки}, \emph{иконки}. \emph{Запустил}~---
+\emph{работает}.
+
+\begin{ideabox}
+\textbf{AppImage~--- это \emph{контейнер}.} Как \emph{чемодан}:
+\emph{внутри}~--- \emph{всё} \emph{необходимое}. \emph{Пользователь}
+\emph{не} \emph{думает} \emph{о} \emph{зависимостях}. \emph{Он}
+\emph{просто} \emph{запускает}.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Что такое \textbf{AppImage} и \emph{зачем} он нужен.
+    \item Как \emph{собрать} AppImage через \texttt{linuxdeploy}.
+    \item Как \emph{добавить} иконку и \texttt{.desktop}-файл.
+    \item Как \emph{проверить} AppImage на \emph{чистой} системе.
+\end{itemize}
+
+\section{Что такое AppImage}
+\label{sec:appimage-what}
+
+\textbf{AppImage}~--- это \emph{формат} упаковки приложений
+для Linux. \emph{Один} \emph{файл}, \emph{который}:
+\begin{enumerate}
+    \item \textbf{Содержит} \emph{все} \emph{библиотеки}.
+    \item \textbf{Монтируется} \emph{при} \emph{запуске}.
+    \item \textbf{Работает} \emph{на} \emph{любом} \emph{дистрибутиве}.
+    \item \textbf{Не} \emph{требует} \emph{установки}.
+\end{enumerate}
+
+\begin{table}[htbp]
+\centering
+\caption{Сравнение форматов}
+\label{tab:appimage-vs}
+\small
+\begin{tabularx}{\textwidth}{@{}l L L@{}}
+\toprule
+\textbf{Формат} & \textbf{Плюсы} & \textbf{Минусы} \\
+\midrule
+\textbf{AppImage} & Один файл, без установки & \emph{Большой} \emph{размер} \\
+\textbf{deb/rpm}  & Малый размер & Зависит от \emph{дистрибутива} \\
+\textbf{Flatpak}  & Песочница & Сложная \emph{настройка} \\
+\textbf{Snap}     & Автообновление & Нужен \emph{демон} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{keybox}
+\textbf{AppImage~--- для \emph{пользователя}.} Он \emph{скачал},
+\emph{сделал} \emph{chmod +x}, \emph{запустил}. \emph{Всё}.
+\emph{Никаких} \emph{команд}, \emph{никаких} \emph{зависимостей}.
+\end{keybox}
+
+\section{Сборка AppImage}
+\label{sec:appimage-build}
+
+\textbf{Инструмент}~--- \texttt{linuxdeploy}. \emph{Он}
+\emph{собирает} \emph{AppImage} \emph{из} \emph{собранного}
+\emph{бинарника}.
+
+\subsection{Установка}
+
+\begin{listing}
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+# Скачиваем linuxdeploy
+wget https://github.com/linuxdeploy/linuxdeploy/releases/\
+     download/continuous/linuxdeploy-x86_64.AppImage
+chmod +x linuxdeploy-x86_64.AppImage
+sudo mv linuxdeploy-x86_64.AppImage /usr/local/bin/linuxdeploy
+
+# Плагин для GTK
+wget https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/\
+     releases/download/continuous/\
+     linuxdeploy-plugin-gtk.sh
+chmod +x linuxdeploy-plugin-gtk.sh
+sudo mv linuxdeploy-plugin-gtk.sh /usr/local/bin/
+\end{minted}
+\caption{Установка \texttt{linuxdeploy}}
+\label{lst:appimage-install}
+\end{listing}
+
+\subsection{Сборка}
+
+\textbf{Три} \emph{шага}:
+
+\begin{enumerate}
+    \item \textbf{Собрать} \emph{бинарник}.
+    \item \textbf{Подготовить} \emph{AppDir} (\emph{директорию}
+          \emph{с} \emph{приложением}).
+    \item \textbf{Собрать} \emph{AppImage}.
+\end{enumerate}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+# 1. Собираем бинарник
+cd pc-app
+make clean
+make
+
+# 2. Готовим AppDir
+mkdir -p AppDir/usr/bin
+mkdir -p AppDir/usr/share/applications
+mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+
+cp osc_gen_ui AppDir/usr/bin/
+
+# 3. Desktop-файл
+cat > AppDir/usr/share/applications/osc_gen_ui.desktop << 'EOF'
+[Desktop Entry]
+Name=OscGen UI
+Exec=osc_gen_ui
+Icon=osc_gen_ui
+Type=Application
+Categories=Development;Utility;
+EOF
+
+# 4. Иконка (если есть)
+# cp icon.png AppDir/usr/share/icons/hicolor/256x256/apps/osc_gen_ui.png
+
+# 5. Собираем AppImage
+linuxdeploy --appdir AppDir \
+    --executable AppDir/usr/bin/osc_gen_ui \
+    --desktop-file AppDir/usr/share/applications/osc_gen_ui.desktop \
+    --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/osc_gen_ui.png
+
+appimagetool AppDir
+\end{minted}
+\caption{Сборка AppImage}
+\label{lst:appimage-build}
+\end{listing}
+
+\begin{keybox}
+\textbf{\texttt{linuxdeploy}~--- умный.} Он \emph{сам} \emph{находит}
+\emph{зависимости} (\emph{GTK}, \emph{GLib}, \emph{Cairo}) и
+\emph{копирует} их \emph{в} \emph{AppDir}.
+\emph{Пользователь} \emph{не} \emph{думает} \emph{о} \emph{них}.
+\end{keybox}
+
+\begin{warnbox}
+\textbf{GTK-плагин обязателен.} Без него \emph{тема},
+\emph{шрифты} и \emph{иконки} \emph{не} \emph{работают}.
+\emph{Плагин} \emph{копирует} \emph{все} \emph{темы} \emph{и}
+\emph{шрифты} \emph{в} \emph{AppDir}.
+\end{warnbox}
+
+\section{Проверка}
+\label{sec:appimage-test}
+
+\textbf{Как} \emph{убедиться}, \emph{что} \emph{AppImage}
+\emph{работает}?
+
+\begin{enumerate}
+    \item \textbf{Скопировать} \emph{на} \emph{другую} \emph{машину}
+          (\emph{или} \emph{в} \emph{Docker}).
+    \item \textbf{Запустить} \emph{без} \emph{установки}.
+    \item \textbf{Проверить}, \emph{что} \emph{всё} \emph{работает}.
+\end{enumerate}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+# На чистой системе
+chmod +x OscGen_UI-x86_64.AppImage
+./OscGen_UI-x86_64.AppImage
+\end{minted}
+
+\begin{ideabox}
+\textbf{Если} \emph{AppImage} \emph{запускается} \emph{на}
+\emph{чистой} \emph{системе}~--- \emph{всё} \emph{хорошо}.
+\emph{Если} \emph{нет}~--- \emph{значит}, \emph{linuxdeploy}
+\emph{пропустил} \emph{какую-то} \emph{библиотеку}.
+\emph{Смотрим} \emph{вывод} \emph{команды}.
+\end{ideabox}
+
+\section{Уроки главы}
+\label{sec:appimage-lessons}
+
+\begin{enumerate}
+    \item \textbf{AppImage~--- один файл.} Без установки.
+    \item \textbf{linuxdeploy} \emph{собирает} \emph{AppImage}.
+    \item \textbf{GTK-плагин} \emph{копирует} \emph{темы}
+          \emph{и} \emph{шрифты}.
+    \item \textbf{Проверка} \emph{на} \emph{чистой} \emph{системе}
+          \emph{обязательна}.
+    \item \textbf{Размер} \emph{AppImage}~--- \emph{большой}
+          (\emph{100}--\emph{300} \emph{МБ}).
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:appimage-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли AppImage}
+\label{tab:appimage-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & AppImage не запускается & \emph{Проверить} \emph{зависимости} \\
+2 & Нет темы GTK & \emph{GTK-плагин} \\
+3 & Нет иконки & \emph{Добавить} \emph{в} \emph{AppDir} \\
+4 & Нет \texttt{.desktop} & \emph{Создать} \emph{файл} \\
+5 & Большой размер & \emph{Оптимизировать} \emph{библиотеки} \\
+6 & \emph{Нет} \emph{прав} \emph{на} \emph{запуск} & \texttt{chmod +x} \\
+7 & Ошибка \emph{сегментации} & \emph{Проверить} \emph{на} \emph{чистой} \emph{системе} \\
+8 & \emph{Не} \emph{видит} \emph{порт} & \emph{Правила} \emph{udev} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:appimage-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Соберите \emph{AppImage} для
+\emph{вашего} \emph{приложения}. \emph{Какой}
+\emph{размер}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Добавьте \emph{иконку}.
+\emph{Как} \emph{проверить}, \emph{что} \emph{она}
+\emph{отображается}?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Запустите \emph{AppImage} в
+\emph{Docker}-контейнере (\emph{чистый} \emph{Ubuntu}).
+\emph{Работает}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Предложите \emph{способ}
+\emph{уменьшить} \emph{размер} \emph{AppImage}.
+\emph{Что} \emph{можно} \emph{исключить}?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:appimage-check}
+
+\begin{enumerate}
+    \item Соберите \emph{бинарник}.
+    \item Подготовьте \emph{AppDir}.
+    \item Запустите \emph{linuxdeploy}.
+    \item Соберите \emph{AppImage} \emph{через}
+          \emph{appimagetool}.
+    \item Скопируйте \emph{на} \emph{другую} \emph{машину}.
+    \item \emph{Запустите}. \emph{Проверьте}, \emph{что}
+          \emph{всё} \emph{работает}.
+    \item \emph{Сделайте} \emph{скриншот}~--- \emph{пришлите}
+          \emph{в} \emph{книгу}.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если AppImage запускается~--- вы закончили.}
+Это \emph{главное}. \emph{Дальше}~--- \emph{приложения}:
+\emph{исходный} \emph{код}, \emph{сборка}, \emph{глоссарий}.
+\emph{Книга} \emph{почти} \emph{готова}.
+\end{ideabox}
+
+
