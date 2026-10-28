@@ -40,11 +40,20 @@
 \usepackage{amsmath, amssymb, amsfonts}
 
 % ─── Красивые подписи рисунков и таблиц ──────────
+%\usepackage{caption}
+%\captionsetup{
+%    labelsep=period,  % Точка после номера
+%    font=small        % Чуть мельче
+%}
+
 \usepackage{caption}
-\captionsetup{
-    labelsep=period,  % Точка после номера
-    font=small        % Чуть мельче
+\captionsetup[listing]{
+    labelsep=space,
+    name=Листинг,
+    justification=raggedright,
+    singlelinecheck=false,
 }
+
 
 % ══════════════════════════════════════════════════════════
 %  ПОЛЕЗНЫЕ ПАКЕТЫ
