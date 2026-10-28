@@ -1,0 +1,739 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch16-debug.tex
+%  Отладка: инструменты, типичные ошибки, приёмы
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Отладка}
+\label{ch:debug}
+
+\epigraph{<<Отладка~--- это в два раза сложнее, чем написание кода.
+Если вы пишете код настолько умно, насколько можете, вы по
+определению недостаточно умны, чтобы его отлаживать>>.}{---
+Брайан Керниган}
+
+\section{Введение}
+\label{sec:debug-intro}
+
+Отладка~--- это навык. Не <<магия>>, не <<талант>>~---
+навык, который тренируется. Чем больше вы
+отлаживаете, тем быстрее находите проблемы.
+
+Эта глава~--- про инструменты отладки и типичные
+ошибки в нашем приложении.
+
+\begin{ideabox}
+Отладка~--- это \emph{систематический} процесс, а не
+\emph{случайный} поиск. Вы \emph{формулируете} гипотезу:
+<<программа падает, потому что $X$>>. Потом \emph{проверяете}.
+Если гипотеза \emph{неверна}~--- \emph{другая} гипотеза.
+И так, пока не найдёте.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Как работает \texttt{debug\_log}.
+    \item Как использовать \texttt{gdb}.
+    \item Как найти утечки через \texttt{valgrind}.
+    \item Что такое \texttt{ASan} и \texttt{UBSan}.
+    \item Как читать предупреждения \texttt{GLib}.
+    \item Типичные ошибки нашего приложения.
+\end{itemize}
+
+\section{Инструменты отладки}
+\label{sec:debug-tools}
+
+В Linux есть набор инструментов для отладки.
+Каждый решает свою задачу. Выбор зависит
+от типа проблемы.
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    problem/.style={
+        draw, rounded corners=2mm, thick,
+        minimum width=3.5cm, minimum height=1cm,
+        align=center, font=\small,
+        fill=clrWarn!20
+    },
+    tool/.style={
+        draw, rounded corners=2mm, thick,
+        minimum width=3cm, minimum height=0.8cm,
+        align=center, font=\small\ttfamily,
+        fill=clrLogicData!20
+    },
+    arr/.style={-{Latex[length=3mm]}, thick}
+]
+
+% ─── Координатная сетка (для отладки) ────────────
+\draw[step=1cm, gray!20, very thin] (-6, -6) grid (6, 1);
+
+\node[problem] (p1) at (-4, 0)   {Программа падает\\(segfault)};
+\node[problem] (p2) at (-4, -1.5) {Утечка памяти};
+\node[problem] (p3) at (-4, -3)   {Странное поведение};
+\node[problem] (p4) at (-4, -4.5) {<<Плавающий>> баг};
+
+\node[tool] (t1) at (3, 0)    {gdb};
+\node[tool] (t2) at (3, -1.5) {valgrind};
+\node[tool] (t3) at (3, -3)   {debug\_log};
+\node[tool] (t4) at (3, -4.5) {ASan / UBSan};
+
+\draw[arr] (p1) -- (t1);
+\draw[arr] (p2) -- (t2);
+\draw[arr] (p3) -- (t3);
+\draw[arr] (p4) -- (t4);
+
+% Метки осей (для отладки)
+\foreach \x in {-6,...,6} {
+    \node[font=\tiny, gray] at (\x, -6.3) {\x};
+}
+\foreach \y in {-6,...,1} {
+    \node[font=\tiny, gray] at (-6.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Инструменты отладки и их задачи.}
+\label{fig:debug-tools}
+\end{figure}
+
+\section{Отладочный лог: \texttt{debug\_log.c}}
+\label{sec:debug-log}
+
+Первый инструмент — самый простой.
+Это лог-файл, куда приложение пишет
+все важные события. Работает всегда~---
+даже когда нет gdb под рукой.
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+#define DEBUG_LOG_PATH "/tmp/arduino_debug.log"
+
+void debug_log_init(void)
+{
+    FILE *f = fopen(DEBUG_LOG_PATH, "w");
+    if (f) {
+        fclose(f);
+    }
+}
+
+void debug_log(const char *format, ...)
+{
+    FILE *log_file = fopen(DEBUG_LOG_PATH, "a");
+    if (!log_file) {
+        return;
+    }
+
+    time_t rawtime = time(NULL);
+    struct tm timeinfo;
+    localtime_r(&rawtime, &timeinfo);
+
+    fprintf(log_file, "[%02d:%02d:%02d] ",
+            timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(log_file, format, args);
+    va_end(args);
+
+    fputc('\n', log_file);
+    fclose(log_file);
+}
+\end{minted}
+\caption{\texttt{debug\_log.c}~--- отладочный лог}
+\label{lst:debug-log}
+\end{listing}
+
+\subsection{Как работает}
+
+\textbf{Три ключевых решения:}
+
+\begin{enumerate}
+    \item \textbf{Путь в \texttt{/tmp}}~--- не \texttt{\$HOME}.
+          Лог~--- временный, его можно удалить.
+    \item \textbf{Открытие на каждое сообщение}~---
+          просто и надёжно. Не нужен mutex,
+          не нужна обработка ротации.
+    \item \textbf{Временные метки}~--- \texttt{HH:MM:SS}.
+          Позволяют понять, когда произошло событие.
+\end{enumerate}
+
+\begin{warnbox}
+\texttt{debug\_log} не потокобезопасен. Он открывает
+файл на каждое сообщение. Если два потока
+пишут одновременно~--- строки перемешаются.
+В нашем приложении это не проблема~---
+всё в главном потоке GTK.
+\end{warnbox}
+
+\subsection{Как использовать}
+
+В коде~--- через макрос \texttt{LOG\_DEBUG}:
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+LOG_DEBUG("Порт: получено %zu байт", bytes_read);
+LOG_DEBUG("Открытие порта %s", port);
+LOG_DEBUG("Автореконнект запущен (интервал %d мс)",
+          RECONNECT_INTERVAL_MS);
+\end{minted}
+\caption{Использование \texttt{LOG\_DEBUG}}
+\label{lst:debug-log-usage}
+\end{listing}
+
+В терминале~--- наблюдение в реальном
+времени:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+tail -f /tmp/arduino_debug.log
+\end{minted}
+
+\begin{keybox}
+\texttt{LOG\_DEBUG}~--- это \emph{не} \texttt{printf}.
+Макрос отключается при сборке с
+\texttt{-DNDEBUG}. Так релизная сборка не тратит
+время на запись лога.
+\end{keybox}
+
+\section{Отладчик \texttt{gdb}}
+\label{sec:debug-gdb}
+
+\texttt{gdb}~--- это пошаговый отладчик.
+Позволяет остановить программу в любом
+месте, посмотреть значения переменных,
+пройти по коду строчка за строчкой.
+
+\subsection{Запуск}
+
+Собираем с отладочной информацией:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+cd arduino-control
+mkdir build && cd build
+cmake -DCMAKE_BUILD_TYPE=Debug ..
+make
+\end{minted}
+
+Запускаем под gdb:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+gdb ./arduino_control
+\end{minted}
+
+\subsection{Основные команды}
+
+\begin{table}[htbp]
+\centering
+\caption{Основные команды \texttt{gdb}}
+\label{tab:gdb-commands}
+\small
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\textbf{Команда} & \textbf{Что делает} \\
+\midrule
+\texttt{run}             & Запустить программу \\
+\texttt{break file:line} & Поставить точку останова \\
+\texttt{continue}        & Продолжить выполнение \\
+\texttt{next}            & Следующая строка (без захода в функции) \\
+\texttt{step}            & Следующая строка (с заходом в функции) \\
+\texttt{print var}       & Показать значение переменной \\
+\texttt{backtrace}       & Показать стек вызовов \\
+\texttt{quit}            & Выйти \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Пример: найти падение}
+
+Проблема: программа падает при открытии
+порта. Где именно?
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+$ gdb ./arduino_control
+(gdb) run
+Program received signal SIGSEGV, Segmentation fault.
+0x0000555555558a4c in open_serial_port (app=0x0, port=0x0)
+    at src/serial_port.c:245
+245     if (!app->is_connected || !app->channel) {
+(gdb) backtrace
+#0  open_serial_port (app=0x0, port=0x0) at serial_port.c:245
+#1  0x0000555555556e10 in on_connect_clicked (button=..., user_data=...)
+#2  0x00007ffff7e0a8f5 in g_signal_emit_valist ...
+(gdb) print app
+$1 = (AppData *) 0x0
+\end{minted}
+
+Что видим: \texttt{app == NULL}. Значит,
+где-то передали \texttt{NULL} в колбэк.
+Ищем источник.
+
+\begin{keybox}
+\texttt{backtrace}~--- самая важная команда. Она
+показывает \emph{путь} до места падения:
+какая функция вызвала какую. Читать
+стек~--- базовый навык отладки.
+\end{keybox}
+
+\section{Поиск утечек: \texttt{valgrind}}
+\label{sec:debug-valgrind}
+
+\texttt{valgrind}~--- это виртуальная машина,
+которая перехватывает все вызовы
+\texttt{malloc}/\texttt{free} и находит утечки.
+
+\subsection{Запуск}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+valgrind --leak-check=full \
+         --show-leak-kinds=all \
+         --track-origins=yes \
+         ./arduino_control
+\end{minted}
+
+\subsection{Что искать в выводе}
+
+Пример утечки:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+==12345== HEAP SUMMARY:
+==12345==     in use at exit: 1,024 bytes in 8 blocks
+==12345==   total heap usage: 12,345 allocs, 12,337 frees,
+                567,890 bytes allocated
+==12345==
+==12345== 128 bytes in 1 blocks are definitely lost in loss record 3 of 8
+==12345==    at 0x4C2FB0F: malloc (in /usr/lib/valgrind/...)
+==12345==    by 0x108A4C: on_save_log_clicked (callbacks.c:321)
+==12345==    by 0x4E3A8F5: g_signal_emit_valist ...
+\end{minted}
+
+Что значит:
+
+\begin{itemize}
+    \item \textbf{128 bytes}~--- размер утечки.
+    \item \textbf{definitely lost}~--- 100\% утечка.
+    \item \textbf{on\_save\_log\_clicked (callbacks.c:321)}~---
+          место, где выделили и не освободили.
+\end{itemize}
+
+\begin{warnbox}
+Не все <<утечки>> — настоящие. GLib иногда
+аллоцирует память на старте и
+не освобождает её при выходе~---
+это нормально. Ищите только
+\texttt{definitely lost} в своём коде.
+\end{warnbox}
+
+\section{Санитайзеры: \texttt{ASan} и \texttt{UBSan}}
+\label{sec:debug-sanitizers}
+
+Санитайзеры~--- это встроенные в компилятор
+проверки. Они добавляют код, который
+ловит ошибки во время выполнения.
+Быстрее valgrind~--- в 10-20 раз.
+
+\subsection{Включение}
+
+В нашем \texttt{CMakeLists.txt} они уже включены
+для Debug-сборки:
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{cmake}
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR NOT CMAKE_BUILD_TYPE)
+    add_compile_options(-g3 -O0 -fno-omit-frame-pointer)
+    add_compile_options(-fsanitize=address,undefined)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+\end{minted}
+\caption{Санитайзеры в \texttt{CMakeLists.txt}}
+\label{lst:debug-sanitizers}
+\end{listing}
+
+\subsection{Что ловит \texttt{ASan}}
+
+\textbf{\texttt{ASan} (AddressSanitizer)} ловит:
+
+\begin{itemize}
+    \item \textbf{Переполнение буфера}.
+    \item \textbf{Использование после \texttt{free}}.
+    \item \textbf{Двойной \texttt{free}}.
+    \item \textbf{Утечки (при выходе)}.
+\end{itemize}
+
+\textbf{Пример сообщения}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+==12345==ERROR: AddressSanitizer: heap-buffer-overflow
+READ of size 4 at 0x602000000010 thread T0
+    #0 0x4d8b3f in line_buffer_feed line_buffer.c:45
+    #1 0x4d7a21 in on_serial_data serial_port.c:112
+\end{minted}
+
+Что значит: в \texttt{line\_buffer\_feed} читаем
+за пределами буфера. Строка 45~--- место проблемы.
+
+\subsection{Что ловит \texttt{UBSan}}
+
+\textbf{\texttt{UBSan} (UndefinedBehaviorSanitizer)} ловит:
+
+\begin{itemize}
+    \item \textbf{Деление на ноль}.
+    \item \textbf{Переполнение знаковых чисел}.
+    \item \textbf{Сдвиг на отрицательное число}.
+    \item \textbf{Выход за границы массива}.
+\end{itemize}
+
+\begin{ideabox}
+Санитайзеры~--- это <<бесплатные>> проверки. Вы
+просто собираете с \texttt{-fsanitize}~---
+и получаете сотни проверок во время
+работы. Включите их в Debug-сборке~---
+и забудьте про большинство ошибок
+памяти.
+\end{ideabox}
+
+\section{Сообщения \texttt{GLib}}
+\label{sec:debug-glib}
+
+\textbf{GLib} пишет предупреждения в
+\textbf{stderr. Они выглядят пугающе, но обычно указывают на конкретную проблему.}
+
+\subsection{Типичные сообщения}
+
+\begin{table}[htbp]
+\centering
+\caption{Типичные предупреждения GLib}
+\label{tab:glib-warnings}
+\small
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\textbf{Сообщение} & \textbf{Что значит} \\
+\midrule
+\texttt{GObject-CRITICAL} & Обращение к уничтоженному объекту \\
+\texttt{GLib-GObject-CRITICAL} & Неправильный тип в \texttt{GTK\_*} макросе \\
+\texttt{Source ID N was not found} & \texttt{g\_source\_remove} для удалённого таймера \\
+\texttt{gtk\_widget\_*: assertion failed} & Виджет не тот, что ожидался \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Пример: \texttt{GObject-CRITICAL}}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+(arduino_control:12345): Gtk-CRITICAL :
+gtk_widget_set_sensitive: assertion 'GTK_IS_WIDGET (widget)' failed
+\end{minted}
+
+Что значит: вызываем \texttt{gtk\_widget\_set\_sensitive}
+для объекта, который уже не виджет
+(уничтожен). Причина — обращение к UI
+после \texttt{on\_window\_destroy}.
+
+Решение — флаг \texttt{ui\_alive}:
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+if (app->ui_alive) {
+    gtk_widget_set_sensitive(app->btn_connect, TRUE);
+    /* ... */
+}
+\end{minted}
+\caption{Защита через \texttt{ui\_alive}}
+\label{lst:debug-ui-alive}
+\end{listing}
+
+\begin{keybox}
+GLib-CRITICAL~--- это \emph{сигнал}, а не \emph{шум}.
+Если видите \texttt{CRITICAL}~--- ищите
+причину. Игнорировать их нельзя~---
+они предупреждают о реальных багах.
+\end{keybox}
+
+\section{Отладка STM32}
+\label{sec:debug-stm32}
+
+\textbf{STM32} отлаживается \emph{иначе}: через
+\texttt{OpenOCD} и \texttt{gdb}.
+
+\subsection{Подключение}
+
+\textbf{Терминал 1}: \texttt{openocd}.
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+openocd -f interface/stlink.cfg -f target/stm32f4x.cfg
+\end{minted}
+
+\textbf{Терминал 2}: \texttt{gdb}.
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+arm-none-eabi-gdb
+(gdb) target extended-remote 127.0.0.1:3333
+(gdb) file build/firmware.elf
+(gdb) load
+(gdb) break main
+(gdb) continue
+\end{minted}
+
+\subsection{HardFault}
+
+\textbf{HardFault}~--- самая частая ошибка на STM32.
+\textbf{Что делать}:
+
+\begin{enumerate}
+    \item \textbf{Смотрим регистры}:
+          \texttt{info registers}.
+    \item \textbf{Смотрим PC}~--- где упало.
+    \item \textbf{Смотрим CFSR/HFSR}~--- что случилось.
+    \item \textbf{Смотрим стек}~--- кто вызвал.
+\end{enumerate}
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+(gdb) info registers
+pc             0x08001234
+(gdb) x/4z 0x08001234
+0x8001234: 0x00000000 0x00000000 ...
+(gdb) print/x *(uint32_t*)0xE000ED28
+$1 = 0x00008200
+\end{minted}
+\caption{Диагностика HardFault}
+\label{lst:debug-hardfault}
+\end{listing}
+
+\begin{keybox}
+\textbf{CFSR} (\texttt{0xE000ED28})~--- Configurable
+Fault Status Register. \emph{Его} биты \emph{говорят},
+\emph{что} \emph{случилось}: \emph{невыровненный}
+\emph{доступ}, \emph{деление} \emph{на} \emph{ноль},
+\emph{невалидная} \emph{инструкция}.
+\end{keybox}
+
+\section{Типичные ошибки}
+\label{sec:debug-common}
+
+Собрали список ошибок, которые
+встречались в нашем проекте. Каждая~---
+с объяснением и решением.
+
+\subsection{Segfault в колбэке}
+
+Симптом: программа падает при клике
+на кнопку.
+
+Причина: \texttt{user\_data} равен \texttt{NULL}
+или указывает на освобождённую память.
+
+Решение:
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+void on_connect_clicked(GtkButton *button, gpointer user_data)
+{
+    AppData *app = (AppData *)user_data;
+    if (!app) {
+        LOG_DEBUG("on_connect_clicked: app == NULL");
+        return;
+    }
+    /* ... */
+}
+\end{minted}
+\caption{Проверка \texttt{user\_data}}
+\label{lst:debug-null-check}
+\end{listing}
+
+\subsection{Таймер работает после \texttt{app\_data\_free}}
+
+Симптом: \texttt{GObject-CRITICAL} через
+несколько секунд после выхода.
+
+Причина: таймер не остановлен до
+освобождения \texttt{AppData}.
+
+Решение: \texttt{app\_data\_free} останавливает
+все таймеры первым делом.
+
+\subsection{Утечка строк}
+
+Симптом: \texttt{valgrind} показывает
+\texttt{definitely lost} в \texttt{gtk\_text\_buffer\_get\_text}.
+
+Причина: \texttt{gtk\_text\_buffer\_get\_text} возвращает
+новую строку, которую надо \texttt{g\_free}.
+
+Решение:
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+char *text = gtk_text_buffer_get_text(buffer, &start, &end, FALSE);
+/* ... используем text ... */
+g_free(text);   /* обязательно */
+\end{minted}
+\caption{Освобождение строки из \texttt{GtkTextBuffer}}
+\label{lst:debug-free-string}
+\end{listing}
+
+\subsection{Двойное закрытие \texttt{fd}}
+
+Симптом: \texttt{close(-1)} возвращает \texttt{EBADF}.
+
+Причина: \texttt{close\_serial\_port} вызывается
+дважды.
+
+Решение: флаг \texttt{closing\_port} защищает
+от рекурсии; проверка \texttt{if (app->fd >= 0)}~---
+от повторного закрытия.
+
+\section{Поток отладки}
+\label{sec:debug-flow}
+
+Отладка~--- это цикл, а не одноразовое
+действие. Схема процесса:
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    box/.style={
+        draw, rounded corners=2mm, thick,
+        minimum width=4.5cm, minimum height=0.9cm,
+        align=center, font=\small
+    },
+    start/.style={box, fill=clrWarn!20},
+    action/.style={box, fill=clrLogicData!20},
+    check/.style={box, fill=clrIdea!20},
+    arr/.style={-{Latex[length=3mm]}, thick}
+]
+
+% ─── Координатная сетка (СНАЧАЛА) ───────────────
+\draw[step=1cm, gray!20, very thin] (-1, -9) grid (7, 1);
+
+% ─── Блоки ───────────────────────────────────────
+\node[start]  (bug)    at (2, 0)    {Проблема};
+\node[action] (repro)  at (2, -1.5) {Воспроизвести стабильно};
+\node[check]  (hypo)   at (2, -3)   {Гипотеза: <<почему?>>};
+\node[action] (check2) at (2, -4.5) {Проверить (gdb, log, valgrind)};
+\node[action] (fix)    at (2, -6)   {Исправить};
+\node[check]  (verify) at (2, -7.5) {Проверить, что исчезло};
+
+% ─── Стрелки ─────────────────────────────────────
+\draw[arr] (bug)    -- (repro);
+\draw[arr] (repro)  -- (hypo);
+\draw[arr] (hypo)   -- (check2);
+\draw[arr] (check2) -- (fix);
+\draw[arr] (fix)    -- (verify);
+\draw[arr] (verify.east) -- ++(2, 0) |- (hypo.east);
+\node[draw=none, font=\footnotesize, right] at (3.6, -5.3)
+    {если не помогло};
+
+% ─── Метки осей (БЕЗ рамок) ─────────────────────
+\foreach \x in {-1,...,7} {
+    \node[draw=none, font=\tiny, gray] at (\x, -9.3) {\x};
+}
+\foreach \y in {-9,...,1} {
+    \node[draw=none, font=\tiny, gray] at (-1.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Цикл отладки.}
+\label{fig:debug-flow}
+\end{figure}
+
+
+\begin{ideabox}
+<<Воспроизвести стабильно>>~--- \emph{первый} шаг.
+Если баг не воспроизводится~--- нельзя
+проверить, что он исправлен. Плавающие
+баги лечатся не отладчиком, а
+логированием~--- ищите закономерность.
+\end{ideabox}
+
+\section{Уроки главы}
+\label{sec:debug-lessons}
+
+\begin{enumerate}
+    \item Отладка~--- это \emph{навык}, а не магия.
+          Тренируется, как и любой другой.
+    \item \texttt{debug\_log}~--- первый инструмент.
+          Работает всегда, не требует внешних программ.
+    \item \texttt{backtrace}~--- самая важная команда
+          \texttt{gdb}. Указывает путь до падения.
+    \item \texttt{valgrind}~--- для утечек. Ищите
+          только \texttt{definitely lost} в своём коде.
+    \item Санитайзеры~--- бесплатные проверки.
+          Включайте в Debug-сборке.
+    \item \texttt{GLib-CRITICAL}~--- сигнал, а не шум.
+          Ищите причину.
+    \item <<Воспроизвести стабильно>>~--- первый шаг.
+          Плавающие баги лечатся логированием.
+    \item \textbf{STM32} отлаживается через
+          \texttt{OpenOCD} + \texttt{gdb}.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:debug-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли отладки}
+\label{tab:debug-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & \texttt{segfault} без сообщения & \texttt{gdb} + \texttt{backtrace} \\
+2 & Утечка памяти & \texttt{valgrind --leak-check=full} \\
+3 & Плавающий баг & \texttt{LOG\_DEBUG} + \texttt{tail -f} \\
+4 & \texttt{GObject-CRITICAL} в логе & Проверить \texttt{ui\_alive} \\
+5 & \texttt{Source ID not found} & Не удалять дважды \texttt{g\_source\_remove} \\
+6 & \texttt{fd = -1} vs \texttt{fd = 0} & Явно инициализировать в \texttt{app\_data\_init} \\
+7 & \texttt{close(-1)} & Проверять \texttt{fd >= 0} \\
+8 & Утечка из \texttt{gtk\_text\_buffer\_get\_text} & \texttt{g\_free(text)} \\
+9 & \texttt{HardFault} на STM32 & \texttt{CFSR}, \texttt{HFSR}, \texttt{backtrace} \\
+10 & Не видно \texttt{printf} из прошивки & \texttt{SWO} или \texttt{UART} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:debug-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Соберите проект с \texttt{-fsanitize=address}
+и запустите. Найдите все утечки. Сколько их в \emph{вашем}
+коде (без учёта GLib и GTK)?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Поставьте точку останова в
+\texttt{on\_serial\_line\_received} и запустите программу
+под \texttt{gdb}. Понаблюдайте, что происходит при приёме
+строки. Сколько \emph{уровней} \texttt{backtrace} до
+\texttt{on\_serial\_data}?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Добавьте в \texttt{debug\_log} поддержку
+\emph{уровней}: \texttt{DEBUG}, \texttt{INFO}, \texttt{ERROR}.
+Как фильтровать сообщения по уровню через \emph{переменную
+окружения}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Что произойдёт, если вызвать
+\texttt{close\_serial\_port} из \emph{двух} потоков
+одновременно? Как защитить функцию через \texttt{GMutex}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 5.} Напишите bash-скрипт, который
+запускает программу под \texttt{valgrind} и \emph{парсит}
+вывод~--- выводит только \texttt{definitely lost} с указанием
+файла и строки. Как автоматизировать поиск утечек?
+\end{exercisebox}
+
+
