@@ -1,0 +1,332 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch14-gen-ui.tex
+%  Интерфейс генератора: управление формой, частотой, амплитудой
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Интерфейс генератора}
+\label{ch:gen-ui}
+
+\epigraph{<<Хороший интерфейс~--- это когда пользователь
+не думает, а просто делает>>.}{}
+
+\section{Введение}
+\label{sec:gen-ui-intro}
+
+В \texttt{ch13} мы нарисовали \emph{осциллограмму}. Теперь~---
+\emph{вторая} \emph{половина} ПК-приложения: \textbf{управление}
+\emph{генератором}. Пользователь \emph{выбирает} \emph{форму},
+\emph{частоту}, \emph{амплитуду}~--- и \emph{видит} \emph{результат}
+\emph{на} \emph{экране}.
+
+\begin{ideabox}
+\textbf{Интерфейс генератора~--- это \emph{пульт} управления.}
+Каждый \emph{виджет}~--- \emph{кнопка}, \emph{слайдер},
+\emph{поле}~--- \emph{отправляет} \emph{команду} \emph{на}
+\emph{STM32}. \emph{И} \emph{получает} \emph{ответ}.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Какие \emph{виджеты} \emph{нужны} для \emph{генератора}.
+    \item Как \emph{связать} \emph{интерфейс} с \emph{протоколом}.
+    \item Как \emph{отправлять} \emph{команды} \emph{в} \emph{порт}.
+    \item Как \emph{получать} \emph{обратную} \emph{связь}
+          \emph{(статус)}.
+\end{itemize}
+
+\section{Виджеты}
+\label{sec:gen-ui-widgets}
+
+\textbf{Для} \emph{генератора} \emph{нужны} \emph{четыре} \emph{типа}
+\emph{виджетов}:
+
+\begin{table}[htbp]
+\centering
+\caption{Виджеты для генератора}
+\label{tab:gen-ui-widgets}
+\small
+\begin{tabularx}{\textwidth}{@{}l L@{}}
+\toprule
+\textbf{Виджет} & \textbf{Назначение} \\
+\midrule
+\texttt{GtkComboBox}   & Выбор формы (синус, меандр, пила...) \\
+\texttt{GtkSpinButton} & Частота, амплитуда, смещение \\
+\texttt{GtkScale}      & Плавная регулировка (для частоты) \\
+\texttt{GtkButton}     & <<Применить>>, <<Сброс>> \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{ideabox}
+\textbf{Почему \texttt{GtkComboBox}, а не кнопки?} \emph{Потому}
+\emph{что} \emph{форм}~--- \emph{шесть}. \emph{Шесть} \emph{кнопок}
+\emph{занимают} \emph{много} \emph{места}. \emph{Combo}~---
+\emph{компактно}.
+\end{ideabox}
+
+\section{Макет}
+\label{sec:gen-ui-layout}
+
+\textbf{Схема} \emph{интерфейса}:
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    label/.style={font=\footnotesize\ttfamily, anchor=west},
+    box/.style={draw, thick, minimum height=0.7cm, align=center,
+                font=\footnotesize\ttfamily}
+]
+
+% ─── Координатная сетка (для отладки) ────────────
+\draw[step=1cm, gray!20, very thin] (-1, -1) grid (13, 10);
+
+% ─── Форма ────────────────────────────────────────
+\node[label] at (0, 9) {Форма:};
+\draw[box, fill=clrUIData!10, minimum width=6cm] (4, 9) rectangle (10, 9.7);
+\node[font=\footnotesize] at (7, 9.35) {Синус $\blacktriangledown$};
+
+% ─── Частота ──────────────────────────────────────
+\node[label] at (0, 7.5) {Частота (Гц):};
+\draw[box, fill=clrUIData!10, minimum width=3cm] (4, 7.5) rectangle (7, 8.2);
+\node[font=\footnotesize] at (5.5, 7.85) {1000};
+\draw[box, fill=clrLogicData!10, minimum width=3cm] (7.5, 7.5) rectangle (10, 8.2);
+\node[font=\footnotesize] at (8.75, 7.85) {Слайдер};
+
+% ─── Амплитуда ────────────────────────────────────
+\node[label] at (0, 6) {Амплитуда (мВ):};
+\draw[box, fill=clrUIData!10, minimum width=3cm] (4, 6) rectangle (7, 6.7);
+\node[font=\footnotesize] at (5.5, 6.35) {1000};
+
+% ─── Смещение ─────────────────────────────────────
+\node[label] at (0, 4.5) {Смещение (мВ):};
+\draw[box, fill=clrUIData!10, minimum width=3cm] (4, 4.5) rectangle (7, 5.2);
+\node[font=\footnotesize] at (5.5, 4.85) {0};
+
+% ─── Скважность ───────────────────────────────────
+\node[label] at (0, 3) {Скважность (‰):};
+\draw[box, fill=clrUIData!10, minimum width=3cm] (4, 3) rectangle (7, 3.7);
+\node[font=\footnotesize] at (5.5, 3.35) {500};
+
+% ─── Кнопки ───────────────────────────────────────
+\draw[box, fill=clrKey!20, minimum width=2.5cm] (4, 1) rectangle (6.5, 1.8);
+\node[font=\footnotesize] at (5.25, 1.4) {Применить};
+
+\draw[box, fill=clrWarn!20, minimum width=2.5cm] (7, 1) rectangle (9.5, 1.8);
+\node[font=\footnotesize] at (8.25, 1.4) {Сброс};
+
+% Метки осей (для отладки)
+\foreach \x in {-1,...,13} {
+    \node[font=\tiny, gray] at (\x, -1.3) {\x};
+}
+\foreach \y in {-1,...,10} {
+    \node[font=\tiny, gray] at (-1.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Схема интерфейса генератора.}
+\label{fig:gen-ui-layout}
+\end{figure}
+
+\section{Команды в порт}
+\label{sec:gen-ui-commands}
+
+\textbf{Каждый} \emph{виджет} \emph{отправляет} \emph{команду}.
+\emph{Команды}~--- \emph{из} \emph{протокола} (\texttt{ch04}):
+
+\begin{itemize}
+    \item \texttt{0x10}~--- \emph{форма} (\texttt{set\_wave}).
+    \item \texttt{0x11}~--- \emph{частота} (\texttt{set\_freq}).
+    \item \texttt{0x12}~--- \emph{амплитуда} (\texttt{set\_ampl}).
+    \item \texttt{0x13}~--- \emph{смещение} (\texttt{set\_offset}).
+    \item \texttt{0x14}~--- \emph{скважность} (\texttt{set\_duty}).
+\end{itemize}
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+void on_apply_generator(GtkButton *btn, gpointer data)
+{
+    AppData *app = data;
+
+    // 1. Форма
+    uint8_t wave = gtk_combo_box_get_active(
+        GTK_COMBO_BOX(app->combo_wave));
+    send_cmd(app->fd_gen, 0x10, &wave, 1);
+
+    // 2. Частота (в миллигерцах)
+    uint32_t freq = gtk_spin_button_get_value_as_int(
+        GTK_SPIN_BUTTON(app->spin_freq)) * 1000;
+    send_cmd(app->fd_gen, 0x11, (uint8_t *)&freq, 4);
+
+    // 3. Амплитуда (мВ)
+    uint16_t ampl = gtk_spin_button_get_value_as_int(
+        GTK_SPIN_BUTTON(app->spin_ampl));
+    send_cmd(app->fd_gen, 0x12, (uint8_t *)&ampl, 2);
+
+    // 4. Смещение (мВ, знаковое)
+    int16_t offset = gtk_spin_button_get_value_as_int(
+        GTK_SPIN_BUTTON(app->spin_offset));
+    send_cmd(app->fd_gen, 0x13, (uint8_t *)&offset, 2);
+
+    // 5. Скважность
+    uint16_t duty = gtk_spin_button_get_value_as_int(
+        GTK_SPIN_BUTTON(app->spin_duty));
+    send_cmd(app->fd_gen, 0x14, (uint8_t *)&duty, 2);
+
+    ui_set_status(app, "Генератор настроен");
+}
+\end{minted}
+\caption{\texttt{on\_apply\_generator()}: отправка команд}
+\label{lst:gen-ui-apply}
+\end{listing}
+
+\begin{keybox}
+\textbf{Пять команд~--- один клик.} \emph{Пользователь}
+\emph{нажимает} <<Применить>>~--- и \emph{все} \emph{параметры}
+\emph{уходят} \emph{в} \emph{порт}. \emph{Каждый} \emph{кадр}~---
+\emph{отдельный} \emph{вызов} \texttt{send\_cmd()}.
+\end{keybox}
+
+\begin{warnbox}
+\textbf{Частота~--- в \emph{миллигерцах}.} \emph{Протокол}
+\emph{требует} \emph{целое} \emph{число}. \SI{1.5}{\kilo\hertz}
+\emph{передаём} \emph{как} \num{1500000} \emph{мГц}.
+\emph{Иначе}~--- \emph{потеряем} \emph{точность}.
+\end{warnbox}
+
+\section{Обратная связь}
+\label{sec:gen-ui-feedback}
+
+\textbf{Генератор} \emph{может} \emph{отвечать}. \emph{Например},
+\emph{на} \emph{запрос} \emph{статуса} (\texttt{0x1F}). \emph{Ответ}
+\emph{содержит} \emph{текущие} \emph{параметры}.
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+void on_gen_status_received(AppData *app, const uint8_t *payload)
+{
+    uint8_t wave = payload[0];
+    uint32_t freq = *(uint32_t *)(payload + 1);
+    uint16_t ampl = *(uint16_t *)(payload + 5);
+    int16_t offset = *(int16_t *)(payload + 7);
+    uint16_t duty = *(uint16_t *)(payload + 9);
+
+    // Обновляем виджеты
+    gtk_combo_box_set_active(
+        GTK_COMBO_BOX(app->combo_wave), wave);
+    gtk_spin_button_set_value(
+        GTK_SPIN_BUTTON(app->spin_freq), freq / 1000);
+    gtk_spin_button_set_value(
+        GTK_SPIN_BUTTON(app->spin_ampl), ampl);
+    gtk_spin_button_set_value(
+        GTK_SPIN_BUTTON(app->spin_offset), offset);
+    gtk_spin_button_set_value(
+        GTK_SPIN_BUTTON(app->spin_duty), duty);
+}
+\end{minted}
+\caption{\texttt{on\_gen\_status\_received()}: обновление виджетов}
+\label{lst:gen-ui-status}
+\end{listing}
+
+\begin{ideabox}
+\textbf{Зачем \emph{обратная} \emph{связь}?} \emph{Пользователь}
+\emph{видит}, \emph{что} \emph{реально} \emph{настроено} \emph{на}
+\emph{STM32}. \emph{Если} \emph{команда} \emph{потерялась}~---
+\emph{виджеты} \emph{покажут} \emph{старые} \emph{значения}.
+\emph{Это}~--- \emph{честно}.
+\end{ideabox}
+
+\section{Уроки главы}
+\label{sec:gen-ui-lessons}
+
+\begin{enumerate}
+    \item \textbf{Виджеты~--- четыре.} \emph{Combo}, \emph{spin},
+          \emph{scale}, \emph{button}.
+    \item \textbf{Каждый виджет~--- команда.} \emph{Пять} \emph{команд}
+          \emph{на} \emph{один} \emph{клик}.
+    \item \textbf{Частота~--- в миллигерцах.} \emph{Целое} \emph{число},
+          \emph{без} \emph{дробей}.
+    \item \textbf{Обратная связь~--- честность.} \emph{Пользователь}
+          \emph{видит} \emph{реальные} \emph{настройки}.
+    \item \textbf{Обновление виджетов~--- через
+          \texttt{gtk\_spin\_button\_set\_value()}.} \emph{Без}
+          \emph{блокировки}.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:gen-ui-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли интерфейса генератора}
+\label{tab:gen-ui-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & Частота~--- дробная & \emph{Миллигерцы} \\
+2 & Забыли \emph{скважность} & \texttt{0x14} \emph{только} \emph{для} \emph{меандра} \\
+3 & Нет обратной связи & \texttt{get\_status} \\
+4 & Обновление \emph{из} \emph{потока} & \texttt{g\_idle\_add()} \\
+5 & Виджеты \emph{не} \emph{сбрасываются} & \emph{Кнопка} <<Сброс>> \\
+6 & Нет проверки \emph{порта} & \emph{Отключить} \emph{кнопку} <<Применить>> \\
+7 & \emph{Нет} \emph{формата} \emph{чисел} & \texttt{snprintf} \emph{с} \emph{точностью} \\
+8 & \emph{Нет} \emph{подсказок} & \emph{Tooltip} \emph{на} \emph{каждом} \emph{виджете} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:gen-ui-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Добавьте \emph{слайдер} для \emph{частоты}
+(\texttt{GtkScale}). \emph{Как} \emph{связать} \emph{его} \emph{со}
+\emph{спиннером}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Реализуйте \emph{кнопку} <<Сброс>>: \emph{все}
+\emph{виджеты} \emph{возвращаются} \emph{к} \emph{значениям} \emph{по}
+\emph{умолчанию} \emph{(синус}, \SI{1}{\kilo\hertz},
+\SI{1}{\volt}, \emph{0}, \emph{500}).
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Добавьте \emph{валидацию}: \emph{частота}
+\emph{не} \emph{может} \emph{быть} \emph{больше}
+\SI{100}{\kilo\hertz}. \emph{Как} \emph{показать} \emph{ошибку}
+\emph{пользователю}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Предложите \emph{способ} \emph{сохранить}
+\emph{настройки} \emph{генератора} \emph{в} \emph{конфиг}
+(\texttt{config.c}). \emph{Какие} \emph{поля} \emph{добавить}?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:gen-ui-check}
+
+\begin{enumerate}
+    \item Соберите \emph{ПК-приложение}.
+    \item Подключите \emph{STM32} с \emph{генератором}.
+    \item \emph{Запустите} \emph{поток}.
+    \item \emph{Измените} \emph{форму} \emph{на} \emph{меандр}.
+    \item \emph{Нажмите} <<Применить>>.
+    \item \emph{Проверьте} \emph{осциллограмму}.
+    \item \emph{Сделайте} \emph{скриншот}~--- \emph{пришлите}
+          \emph{в} \emph{книгу}.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли интерфейс генератора.}
+Это \emph{главное}. Дальше~--- \emph{жизненный} \emph{цикл},
+\emph{отладка}, \emph{AppImage}. \emph{Всё} \emph{впереди}.
+\end{ideabox}
+
