@@ -1,0 +1,156 @@
+% ═══════════════════════════════════════════════════════════════
+%  appendices/b-build.tex
+%  Приложение Б. Сборка проекта
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Сборка проекта}
+\label{app:build}
+
+В этой книге мы используем \textbf{CMake}~--- стандартную систему
+сборки для проектов на C. Она кроссплатформенная, гибкая и понятная.
+
+\section{Зависимости}
+
+Перед сборкой убедитесь, что установлены:
+
+\begin{itemize}
+    \item \textbf{GCC} или \textbf{Clang}~--- компилятор C.
+    \item \textbf{CMake} (версия 3.10 или выше).
+    \item \textbf{GTK 4} и \textbf{GLib}~--- библиотеки интерфейса.
+    \item \textbf{libudev}~--- идентификация устройств.
+    \item \textbf{pkg-config}~--- для поиска библиотек.
+\end{itemize}
+
+\subsection{Установка на Debian/Ubuntu}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo apt update
+sudo apt install build-essential cmake pkg-config \
+                 libgtk-4-dev libglib2.0-dev libudev-dev
+\end{minted}
+
+\subsection{Установка на Fedora}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo dnf install gcc cmake pkg-config \
+                 gtk4-devel glib2-devel libudev-devel
+\end{minted}
+
+\subsection{Установка на Arch Linux}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo pacman -S base-devel cmake pkg-config \
+              gtk4 glib2 systemd-libs
+\end{minted}
+
+\section{Сборка из исходников}
+
+\subsection{Шаг 1. Клонирование}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+git clone https://github.com/danayer/dualboard-stm32-oscilloscope.git
+cd dualboard-stm32-oscilloscope/pc-app
+\end{minted}
+
+\subsection{Шаг 2. Сборка}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+make
+\end{minted}
+
+\subsection{Шаг 3. Запуск}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+./osc_gen_ui
+\end{minted}
+
+\section{Debug и Release}
+
+CMake поддерживает два режима сборки:
+
+\begin{table}[htbp]
+\centering
+\caption{Сравнение режимов сборки}
+\label{tab:build-modes}
+\small
+\begin{tabularx}{\textwidth}{@{}l L L@{}}
+\toprule
+\textbf{Параметр} & \textbf{Debug} & \textbf{Release} \\
+\midrule
+Флаги        & \texttt{-g3 -O0} & \texttt{-O2} \\
+Санитайзеры  & ASan + UBSan & нет \\
+Отладка      & gdb, valgrind & не нужна \\
+Размер       & больше & меньше \\
+Скорость     & медленнее & быстрее \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Debug-сборка}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+cmake -DCMAKE_BUILD_TYPE=Debug ..
+make -j$(nproc)
+\end{minted}
+
+\begin{ideabox}
+\textbf{Всегда начинайте с Debug.} Санитайзеры (ASan, UBSan)
+поймают большинство ошибок памяти \emph{до} того, как они
+превратятся в segfault.
+\end{ideabox}
+
+\subsection{Release-сборка}
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j$(nproc)
+\end{minted}
+
+\section{Правила udev для доступа без sudo}
+
+По умолчанию порт \texttt{/dev/ttyACM0} доступен только root.
+Создайте файл \texttt{/etc/udev/rules.d/99-stm32.rules}:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", MODE="0666"
+\end{minted}
+
+Примените правила:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+\end{minted}
+
+\section{Прошивка STM32}
+
+Прошивка лежит в \texttt{firmware/oscilloscope/} и
+\texttt{firmware/generator/}. Соберите через \textbf{STM32CubeIDE}
+или \textbf{Makefile}.
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+cd firmware/oscilloscope
+make
+st-flash write build/oscilloscope.bin 0x08000000
+\end{minted}
+
+\section{Сборка книги}
+
+Если хотите собрать саму книгу:
+
+\begin{minted}[frame=none, bgcolor=gray!5]{bash}
+cd book
+./compile.sh
+\end{minted}
+
+Требуется \textbf{XeLaTeX} с пакетами \texttt{minted}, \texttt{tcolorbox},
+\texttt{tikz}.
+
+\begin{notebox}
+\textbf{Для minted нужен Python и Pygments.}
+Установите: \texttt{sudo apt install python3-pygments}.
+Также нужен флаг \texttt{--shell-escape} в команде компиляции.
+\end{notebox}
+
+
