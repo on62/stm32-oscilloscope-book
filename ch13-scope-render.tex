@@ -1,0 +1,408 @@
+% ═══════════════════════════════════════════════════════════════
+%  chapters/ch13-scope-render.tex
+%  Отрисовка осциллограммы через Cairo
+% ═══════════════════════════════════════════════════════════════
+
+\chapter{Отрисовка осциллограммы}
+\label{ch:scope-render}
+
+\epigraph{<<Осциллограмма~--- это не просто линия. Это \emph{язык},
+на котором сигнал говорит с инженером>>.}{}
+
+\section{Введение}
+\label{sec:render-intro}
+
+В \texttt{ch12} мы сделали \emph{потоки}, \emph{мьютексы},
+\emph{кольцо} \emph{кадров}. Данные \emph{текут}. Но
+\emph{пользователь} \emph{их} \emph{не} \emph{видит}. Пора
+\emph{нарисовать} \emph{осциллограмму}.
+
+\textbf{Инструмент}~--- \textbf{Cairo}. \emph{Тот} \emph{же},
+что \emph{в} \emph{первой} \emph{книге}. \emph{Но} \emph{задача}
+\emph{другая}: не \emph{график} \emph{фоторезистора}, а
+\emph{осциллограмма} \emph{сигнала}.
+
+\begin{ideabox}
+\textbf{Осциллограмма~--- это \emph{окно} в мир сигнала.}
+Она \emph{показывает} \emph{форму}, \emph{амплитуду},
+\emph{частоту}. \emph{Хорошая} \emph{осциллограмма}~---
+\emph{читается} \emph{мгновенно}. \emph{Плохая}~---
+\emph{требует} \emph{расшифровки}.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Как \emph{перевести} данные в \emph{координаты} \emph{экрана}.
+    \item Как \emph{нарисовать} \emph{сетку} и \emph{оси}.
+    \item Как \emph{построить} \emph{линию} \emph{графика}.
+    \item Как \emph{добавить} \emph{статистику} и \emph{легенду}.
+    \item Как \emph{сделать} \emph{кнопку} \emph{<<Очистить>>}
+          \emph{на} \emph{canvas}.
+\end{itemize}
+
+\section{Координаты: данные в пиксели}
+\label{sec:render-coords}
+
+\textbf{Первая} \emph{задача}~--- \emph{преобразовать}
+\emph{данные} \emph{в} \emph{координаты} \emph{экрана}.
+
+\textbf{У} \emph{нас} \emph{есть}:
+\begin{itemize}
+    \item \textbf{Значения} \emph{АЦП} (\num{0}--\num{4095}).
+    \item \textbf{Номер} \emph{точки} ($0$ -- $N-1$).
+\end{itemize}
+
+\textbf{Надо} \emph{получить}:
+\begin{itemize}
+    \item \textbf{$X$}~--- \emph{от} \texttt{left\_margin}
+          \emph{до} \texttt{width - right\_margin}.
+    \item \textbf{$Y$}~--- \emph{от} \texttt{height - bottom\_margin}
+          \emph{до} \texttt{top\_margin}.
+\end{itemize}
+
+
+\subsection{Формулы}
+
+\textbf{Для} \emph{$X$}:
+\[
+x = \text{left\_margin} + i \cdot \frac{\text{graph\_w}}{N - 1}
+\]
+где \(i\)~--- \emph{номер} \emph{точки}, \(N\)~--- \emph{количество}
+\emph{точек}.
+
+\textbf{Для} \emph{$Y$}:
+\[
+y = \text{height} - \text{bottom\_margin}
+    - \frac{v}{\text{ADC\_MAX}} \cdot \text{graph\_h}
+\]
+где \(v\)~--- \emph{значение} \emph{АЦП}.
+
+\begin{keybox}
+\textbf{Cairo} \emph{считает} \emph{$Y$} \emph{сверху}
+\emph{вниз}. \emph{Поэтому} \emph{мы} \emph{вычитаем} \emph{из}
+\texttt{height - bottom\_margin}. \emph{Иначе} \emph{график}
+\emph{будет} \emph{перевёрнут}.
+\end{keybox}
+
+\section{Сетка и оси}
+\label{sec:render-grid}
+
+\textbf{Сетка}~--- \emph{каркас} \emph{графика}. \emph{Без}
+\emph{неё}~--- \emph{облако} \emph{точек}. \emph{С} \emph{ней}~---
+\emph{понятно}, \emph{где} \emph{какое} \emph{значение}.
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+// Сетка по Y (8 линий)
+for (int i = 0; i <= 8; i++) {
+    double y = height - bottom_margin
+             - (i * graph_h / 8.0);
+    int value = i * ADC_MAX / 8;
+
+    cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
+    cairo_set_line_width(cr, 1);
+    cairo_move_to(cr, left_margin, y);
+    cairo_line_to(cr, width - right_margin, y);
+    cairo_stroke(cr);
+
+    // Метка
+    char label[16];
+    snprintf(label, sizeof(label), "%d", value);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_move_to(cr, left_margin - 38, y + 4);
+    cairo_show_text(cr, label);
+}
+\end{minted}
+\caption{Сетка по Y}
+\label{lst:render-grid-y}
+\end{listing}
+
+\textbf{Что} \emph{здесь} \emph{важно}:
+\begin{itemize}
+    \item \textbf{8} \emph{линий}~--- \emph{универсальный}
+          \emph{выбор}. \emph{Не} \emph{слишком} \emph{часто},
+          \emph{не} \emph{слишком} \emph{редко}.
+    \item \textbf{Светло-серый} \emph{цвет}~--- \emph{сетка}
+          \emph{не} \emph{должна} \emph{затмевать} \emph{сигнал}.
+    \item \textbf{Метки} \emph{слева}~--- \emph{значения}
+          \emph{АЦП}.
+\end{itemize}
+
+\section{Линия графика}
+\label{sec:render-line}
+
+\textbf{Линия}~--- \emph{главный} \emph{элемент}. \emph{Она}
+\emph{соединяет} \emph{соседние} \emph{точки} \emph{и}
+\emph{показывает} \emph{форму} \emph{сигнала}.
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+cairo_set_source_rgb(cr, 0.2, 1.0, 0.2);  // ярко-зелёный
+cairo_set_line_width(cr, 1.5);
+
+// Копируем данные под мьютексом
+OscFrame frame;
+if (ring_pop(&app->ring, &frame)) {
+    int n = frame.nsamples;
+    double x_step = (n > 1) ? (double)graph_w / (n - 1) : 0;
+
+    for (int i = 0; i < n; i++) {
+        double x = left_margin + i * x_step;
+        double y = height - bottom_margin
+                 - (frame.samples[i] / ADC_MAX) * graph_h;
+
+        if (i == 0) cairo_move_to(cr, x, y);
+        else        cairo_line_to(cr, x, y);
+    }
+    cairo_stroke(cr);
+}
+\end{minted}
+\caption{Линия графика}
+\label{lst:render-line}
+\end{listing}
+
+\begin{warnbox}
+\textbf{Данные} \emph{берём} \emph{под} \emph{мьютексом}.
+\emph{Иначе}~--- \emph{гонка} \emph{данных}. \emph{График}
+\emph{может} \emph{<<сломаться>>} \emph{посередине}.
+\end{warnbox}
+
+\section{Статистика и легенда}
+\label{sec:render-stats}
+
+\textbf{Статистика}~--- \emph{четыре} \emph{числа}, \emph{которые}
+\emph{говорят} \emph{о} \emph{сигнале} \emph{больше}, \emph{чем}
+\emph{тысяча} \emph{пикселей}:
+\begin{itemize}
+    \item \textbf{Текущее}~--- \emph{последнее} \emph{значение}.
+    \item \textbf{Минимум}~--- \emph{самое} \emph{низкое}.
+    \item \textbf{Максимум}~--- \emph{самое} \emph{высокое}.
+    \item \textbf{Среднее}~--- \emph{типичное}.
+\end{itemize}
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+PlotStats s = compute_stats(&frame);
+if (s.valid) {
+    char stats[128];
+    snprintf(stats, sizeof(stats),
+             "Тек: %d  Мин: %d  Макс: %d  Сред: %d",
+             s.last, s.min, s.max, s.avg);
+
+    cairo_set_source_rgb(cr, 0, 0.5, 0);
+    cairo_set_font_size(cr, 10);
+    cairo_move_to(cr, left_margin, top_margin - 10);
+    cairo_show_text(cr, stats);
+}
+\end{minted}
+\caption{Статистика}
+\label{lst:render-stats}
+\end{listing}
+
+\begin{ideabox}
+\textbf{Легенда}~--- \emph{ключ} \emph{к} \emph{графику}. \emph{Она}
+\emph{объясняет}, \emph{что} \emph{означает} \emph{зелёная}
+\emph{линия}. \emph{Без} \emph{неё}~--- \emph{<<чёрный} \emph{ящик>>}.
+\end{ideabox}
+
+\section{Кнопка <<Очистить>> на canvas}
+\label{sec:render-button}
+
+\textbf{Кнопка} \emph{<<Очистить>>}~--- \emph{не} \emph{GTK-виджет}.
+\emph{Она} \emph{нарисована} \emph{прямо} \emph{на} \emph{canvas}.
+\emph{Клик} \emph{обрабатывается} \emph{вручную}.
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+// Отрисовка
+double btn_x = width / 2.0 - 80;
+double btn_y = 5;
+double btn_w = 160;
+double btn_h = 28;
+
+cairo_set_source_rgb(cr, 0.8, 0.8, 0.8);
+cairo_rectangle(cr, btn_x, btn_y, btn_w, btn_h);
+cairo_fill(cr);
+
+cairo_set_source_rgb(cr, 0, 0, 0);
+cairo_set_font_size(cr, 12);
+cairo_move_to(cr, btn_x + 25, btn_y + 19);
+cairo_show_text(cr, "Очистить график");
+
+// Обработка клика
+gboolean on_graph_button_press(GtkWidget *w,
+                               GdkEventButton *e,
+                               gpointer data)
+{
+    AppData *app = data;
+    int width = gtk_widget_get_allocated_width(w);
+    double btn_x = width / 2.0 - 80;
+    double btn_y = 5;
+    double btn_w = 160;
+    double btn_h = 28;
+
+    if (e->x >= btn_x && e->x <= btn_x + btn_w &&
+        e->y >= btn_y && e->y <= btn_y + btn_h) {
+        ring_clear(&app->ring);
+        gtk_widget_queue_draw(app->drawing_area);
+        return TRUE;
+    }
+    return FALSE;
+}
+\end{minted}
+\caption{Кнопка <<Очистить>>: отрисовка и обработка}
+\label{lst:render-button}
+\end{listing}
+
+
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm
+]
+
+% ─── Координатная сетка (для отладки) ────────────
+\draw[step=1cm, gray!20, very thin] (-1, -1) grid (13, 7);
+
+% ─── Внешний прямоугольник — виджет ──────────────
+\draw[thick, fill=white] (0, 0) rectangle (12, 6);
+
+% ─── Внутренний прямоугольник — область графика ──
+\draw[thick, fill=clrLogicData!10] (2, 1) rectangle (10, 5);
+
+% Название внутри
+\node[font=\small\bfseries] at (6, 3) {график};
+
+% ─── Подписи отступов (снаружи) ──────────────────
+\node[font=\footnotesize\ttfamily, gray!70!black, anchor=south]
+    at (6, 5.1) {top\_margin};
+
+\node[font=\footnotesize\ttfamily, gray!70!black, anchor=north]
+    at (6, 0.9) {bottom\_margin};
+
+\node[font=\footnotesize\ttfamily, gray!70!black, rotate=90, anchor=south]
+    at (1.9, 3) {left\_margin};
+
+\node[font=\footnotesize\ttfamily, gray!70!black, rotate=-90, anchor=north]
+    at (10.6, 3) {right\_margin};
+
+% Метки осей (для отладки)
+\foreach \x in {-1,...,13} {
+    \node[font=\tiny, gray] at (\x, -1.3) {\x};
+}
+\foreach \y in {-1,...,7} {
+    \node[font=\tiny, gray] at (-1.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Схема отступов в графике.}
+\label{fig:render-margins}
+\end{figure}
+
+
+
+\begin{warnbox}
+\textbf{Координаты} \emph{кнопки} \emph{дублируются}~---
+\emph{в} \emph{отрисовке} \emph{и} \emph{в} \emph{обработке}.
+\emph{Если} \emph{поменять} \emph{в} \emph{одном} \emph{месте}
+\emph{и} \emph{забыть} \emph{в} \emph{другом}~--- \emph{кнопка}
+\emph{<<перестанет} \emph{нажиматься>>}. \emph{Вынесите}
+\emph{их} \emph{в} \emph{константы}.
+\end{warnbox}
+
+\section{Уроки главы}
+\label{sec:render-lessons}
+
+\begin{enumerate}
+    \item \textbf{Координаты~--- первое.} Без \emph{преобразования}
+          \emph{данных} \emph{в} \emph{пиксели}~--- \emph{ничего}
+          \emph{не} \emph{нарисуешь}.
+    \item \textbf{Cairo} \emph{считает} \emph{$Y$} \emph{сверху}
+          \emph{вниз}. \emph{Не} \emph{забудьте} \emph{вычесть}.
+    \item \textbf{Сетка~--- 8} \emph{линий}. \emph{Универсальный}
+          \emph{выбор}.
+    \item \textbf{Данные} \emph{берём} \emph{под} \emph{мьютексом}.
+          \emph{Иначе}~--- \emph{гонка}.
+    \item \textbf{Статистика~--- 4} \emph{числа}. \emph{Больше},
+          \emph{чем} \emph{1000} \emph{пикселей}.
+    \item \textbf{Кнопка} \emph{на} \emph{canvas}~--- \emph{два}
+          \emph{места}: \emph{отрисовка} \emph{и} \emph{клик}.
+          \emph{Координаты} \emph{должны} \emph{совпадать}.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:render-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли отрисовки}
+\label{tab:render-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & График перевёрнут & \texttt{height - bottom\_margin} \\
+2 & Нет сетки & 8 линий по Y \\
+3 & Гонка данных & \texttt{g\_mutex\_lock()} \\
+4 & Кнопка не нажимается & Координаты в константы \\
+5 & Забыли \texttt{cairo\_stroke} & Линия не рисуется \\
+6 & Метки налезают & Сдвиг \texttt{left\_margin - 38} \\
+7 & Нет \texttt{queue\_draw} & График не обновляется \\
+8 & Нет проверки \texttt{valid} & Деление на 0 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:render-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Нарисуйте \emph{вертикальную}
+\emph{линию}~--- \emph{маркер} \emph{максимума}. \emph{Цвет}~---
+\emph{красный}, \emph{толщина}~--- \emph{2}.
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Добавьте \emph{масштабирование}:
+\emph{колёсико} \emph{мыши} \emph{меняет} \emph{масштаб} \emph{по}
+\emph{$X$}.
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Реализуйте \emph{курсор}: \emph{при}
+\emph{наведении} \emph{показывает} \emph{значение} \emph{в}
+\emph{точке}.
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Сохраните \emph{осциллограмму} в
+\emph{PNG}. \emph{Какие} \emph{API} \emph{нужны}?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:render-check}
+
+\begin{enumerate}
+    \item Соберите \emph{ПК-приложение}.
+    \item Подключите \emph{Nucleo}.
+    \item Запустите \emph{поток}.
+    \item \emph{Проверьте}, что \emph{график} \emph{рисуется}.
+    \item \emph{Нажмите} <<Очистить>>~--- \emph{график} \emph{пуст}.
+    \item \emph{Сделайте} \emph{скриншот}~--- \emph{пришлите}
+          \emph{в} \emph{книгу}.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли Cairo.} Это
+\emph{главное}. Дальше~--- \emph{интерфейс} \emph{генератора},
+\emph{жизненный} \emph{цикл}, \emph{отладка}. \emph{Всё}
+\emph{впереди}.
+\end{ideabox}
+
+
