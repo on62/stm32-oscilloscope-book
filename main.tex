@@ -1,34 +1,29 @@
-% ═══════════════════════════════════════════════════════════════
+%══════════════════════════════════════════════════════════
 %  main.tex — главный файл книги
-% ═══════════════════════════════════════════════════════════════
+%══════════════════════════════════════════════════════════
 \documentclass[11pt, a4paper, oneside]{book}
 
 \input{preamble}     % все пакеты и настройки
 \input{styles}       % пользовательские стили
 
-
-
 \begin{document}
 
 % ─── Титульная страница ───────────────────────────────────
 \frontmatter
-%\input{titlepage}
-%\input{preface}
+\input{titlepage}
+\input{preface}
 
 % ─── Оглавление ──────────────────────────────────────────
-%\tableofcontents
-%\listoffigures
-%\listoftables
-%%%\lstlistoflistings — из listings (некрасивый).
-%%%\listoflistings — из minted (правильный).
-%\listoflistings
-
-
+\clearpage
+\tableofcontents
+\listoffigures
+\listoftables
+\listoflistings
 
 % ─── Основная часть ──────────────────────────────────────
+\clearpage
 \mainmatter
 
-%\part{Введение в проект}
 %\input{ch01-intro}
 %\input{ch02-flashing}
 %\input{ch03-architecture}
@@ -39,17 +34,7 @@
 %\input{ch08-generator}
 %\input{ch09-dds}
 %\input{ch10-dac-dma}
-\input{ch11-gtk4-basics}
-
-%% ─── Приложения ──────────────────────────────────────────
-%\appendix
-%\input{appendices/a-source}
-%\input{appendices/b-makefile}
-%\input{appendices/c-glossary}
-
-% ─── Предметный указатель ────────────────────────────────
-%\backmatter
-%\printindex
-
+%\input{ch11-gtk4-basics}
+\input{ch12-pc-architecture}
 
 \end{document}

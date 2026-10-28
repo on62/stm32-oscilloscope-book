@@ -1,0 +1,647 @@
+% ═════════════════════════════════════════════════════════
+%  chapters/ch12-pc-architecture.tex
+%  Архитектура ПК-приложения: потоки, мьютексы, очереди
+% ═════════════════════════════════════════════════════════
+
+\chapter{Архитектура ПК-приложения}
+\label{ch:pc-architecture}
+
+\epigraph{<<UI~--- это не просто кнопки. Это \emph{поток}
+событий. Если поток останавливается~--- приложение мертво>>.}{}
+
+\section{Введение}
+\label{sec:pc-intro}
+
+В \texttt{ch11} мы создали \emph{первое} GTK4-приложение.
+В \texttt{ch05}--\texttt{ch10}~--- \emph{прошивку} для
+STM32. Теперь~--- \emph{соединим} их. \textbf{ПК-приложение},
+которое \emph{управляет} осциллографом и генератором.
+
+\textbf{Задача}~--- \emph{сложная}. Нужно:
+\begin{itemize}
+    \item \textbf{Читать} данные из порта \emph{непрерывно}.
+    \item \textbf{Рисовать} график \emph{в} \emph{реальном} времени.
+    \item \textbf{Реагировать} на \emph{кнопки} пользователя.
+    \item \textbf{Не} \emph{зависать} при \emph{этом}.
+\end{itemize}
+
+\begin{ideabox}
+\textbf{Главная проблема~--- \emph{многопоточность}.} Если \emph{читать}
+порт в \emph{главном} потоке~--- \emph{интерфейс} \emph{зависнет}.
+Если \emph{рисовать} в \emph{фоновом}~--- \emph{упадёт} (GTK
+\emph{не} \emph{потокобезопасен}). Нужен \emph{баланс}.
+\end{ideabox}
+
+\subsection{Что вы узнаете}
+
+\begin{itemize}
+    \item Почему \emph{один} поток~--- \emph{плохо}.
+    \item Как \emph{работают} потоки в GLib.
+    \item Что такое \emph{мьютекс} и \emph{зачем} он нужен.
+    \item Как \emph{безопасно} обновлять UI из \emph{потока}.
+    \item Как \emph{устроен} поток чтения осциллографа.
+\end{itemize}
+
+\section{Проблема: один поток}
+\label{sec:pc-problem}
+
+\textbf{Представьте}, что мы \emph{пишем} всё в \emph{одном}
+потоке:
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+while (1) {
+    read(fd, buf, 256);      // блокируется, пока нет данных
+    draw_scope(buf);         // рисует график
+    gtk_main_iteration();    // обрабатывает события GTK
+}
+\end{minted}
+\caption{Наивный подход: всё в одном потоке}
+\label{lst:pc-naive}
+\end{listing}
+
+\textbf{Что} \emph{происходит}:
+\begin{enumerate}
+    \item \texttt{read()} \emph{блокируется}. Пока \emph{нет}
+          \emph{данных}~--- программа \emph{висит}.
+    \item \emph{Кнопки} \emph{не} \emph{нажимаются}. \emph{Окно}
+          \emph{не} \emph{перетаскивается}.
+    \item \emph{Пользователь} \emph{думает}, что \emph{программа}
+          \emph{сломалась}.
+\end{enumerate}
+
+\begin{warnbox}
+\textbf{Это} \emph{худший} \emph{вариант}. \emph{Любое}
+\emph{блокирующее} \emph{действие} \emph{останавливает}
+\emph{весь} UI. \emph{Никакой} \emph{интерактивности}.
+\end{warnbox}
+
+\section{Решение: два потока}
+\label{sec:pc-solution}
+
+\textbf{Правильный} \emph{подход}~--- \textbf{два} \emph{потока}:
+\begin{enumerate}
+    \item \textbf{Главный} (UI)~--- \emph{создаёт} \emph{окна},
+          \emph{кнопки}, \emph{реагирует} \emph{на} \emph{события}.
+    \item \textbf{Фоновый} (чтение)~--- \emph{читает} \emph{порт},
+          \emph{складывает} \emph{данные} в \emph{буфер}.
+\end{enumerate}
+
+
+\begin{figure}[htbp]
+\centering
+\adjustbox{max width=\textwidth}{%
+\begin{tikzpicture}[
+    x=1cm, y=1cm,
+    box/.style={
+        draw, thick, rounded corners=1mm,
+        minimum width=3cm, minimum height=1cm,
+        align=center, font=\footnotesize\ttfamily
+    },
+    ui/.style={box, fill=clrUIData!20},
+    thread/.style={box, fill=clrLogicData!20},
+    hw/.style={box, fill=clrHWData!20},
+    arr/.style={-{Latex[length=3mm]}, very thick},
+    label/.style={
+        font=\footnotesize,
+        fill=white,
+        inner sep=2pt,
+        midway,
+        above
+    },
+    labelbelow/.style={
+        font=\footnotesize,
+        fill=white,
+        inner sep=2pt,
+        midway,
+        below
+    }
+]
+
+% ─── Координатная сетка (для отладки) ────────────
+\draw[step=1cm, gray!20, very thin] (0, 0) grid (11, 5);
+
+% ─── Главный поток (слева) ────────────────────────
+\node[ui] (gtk) at (2, 4) {Главный поток\\(GTK)};
+\node[ui, below=0.5cm of gtk] (draw) {Рисование\\(Cairo)};
+
+% ─── Фоновый поток (справа) ───────────────────────
+\node[thread] (thread) at (8, 4) {Фоновый поток\\(чтение)};
+\node[hw, below=0.5cm of thread] (serial) {serial\_port};
+
+% ─── Буфер (посередине, снизу) ────────────────────
+\node[thread, minimum width=2cm, minimum height=0.8cm]
+    (buf) at (5, 1) {Буфер\\(GMutex)};
+
+% ─── Стрелки внутри потоков ──────────────────────
+\draw[arr, color=clrFlowCmd] (gtk) -- (draw);
+\draw[arr, color=clrFlowCmd] (thread) -- (serial);
+
+% ─── Стрелки к буферу ────────────────────────────
+% write: serial -> buf
+\draw[arr, color=clrFlowData] (serial.south west) -- (buf.north east);
+% read: buf -> draw
+\draw[arr, color=clrFlowData] (buf.north west) -- (draw.south east);
+
+% ─── Подписи (отдельно, не на стрелках) ──────────
+\node[font=\footnotesize, above right] at (6.5, 1.5) {write};
+\node[font=\footnotesize, above left]  at (3.5, 1.5) {read};
+
+% ─── Координатная сетка (для отладки) ────────────
+%\draw[step=1cm, gray!20, very thin] (0, 0) grid (11, 5);
+% ─── Метки осей (для отладки) ────────────────────
+\foreach \x in {0,...,11} {
+    \node[font=\tiny, gray] at (\x, -0.3) {\x};
+}
+\foreach \y in {0,...,5} {
+    \node[font=\tiny, gray] at (-0.3, \y) {\y};
+}
+
+\end{tikzpicture}
+}% end adjustbox
+\caption{Два потока: главный (UI) и фоновый (чтение).
+Буфер защищён мьютексом. \emph{Фоновый} поток
+\emph{вызывает} \texttt{serial\_port} и \emph{пишет} в буфер.}
+\label{fig:pc-two-threads}
+\end{figure}
+
+
+
+
+
+
+\begin{keybox}
+\textbf{Главный поток} \emph{никогда} \emph{не} \emph{блокируется}.
+Он \emph{только} \emph{обрабатывает} \emph{события}.
+\textbf{Фоновый} \emph{читает} \emph{порт}. \emph{Общаются}~---
+\emph{через} \emph{буфер} (**мьютекс**).
+\end{keybox}
+
+\section{Мьютекс: защита общих данных}
+\label{sec:pc-mutex}
+
+\textbf{Проблема}: \emph{два} \emph{потока} \emph{обращаются} \emph{к}
+\emph{одному} \emph{буферу}. \emph{Один} \emph{пишет}, \emph{другой}
+\emph{читает}. \emph{Что} \emph{если} \emph{одновременно}?
+
+\begin{itemize}
+    \item \emph{Читатель} \emph{возьмёт} \emph{половину} \emph{новых}
+          \emph{данных} \emph{и} \emph{половину} \emph{старых}~---
+          \emph{график} \emph{<<сломается>>}.
+    \item \emph{Или} \emph{читатель} \emph{прочитает} \emph{данные},
+          \emph{которые} \emph{ещё} \emph{не} \emph{записаны}
+          \emph{до} \emph{конца}.
+\end{itemize}
+
+\textbf{Решение}~--- \textbf{мьютекс} (mutual exclusion).
+\emph{Замок}, \emph{который} \emph{защищает} \emph{буфер}:
+\emph{пока} \emph{один} \emph{поток} \emph{работает}~
+--- \emph{другой} \emph{ждёт}.
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+// Инициализация
+GMutex mutex;
+g_mutex_init(&mutex);
+
+// Писатель (фоновый поток)
+g_mutex_lock(&mutex);
+// запись в буфер
+g_mutex_unlock(&mutex);
+
+// Читатель (главный поток)
+g_mutex_lock(&mutex);
+// чтение из буфера
+g_mutex_unlock(&mutex);
+\end{minted}
+\caption{\texttt{GMutex}: защита общих данных}
+\label{lst:pc-mutex}
+\end{listing}
+
+\begin{ideabox}
+\textbf{Мьютекс~--- это <<ключ>>.} \emph{Пока} \emph{один}
+\emph{поток} \emph{держит} \emph{ключ}~--- \emph{другой}
+\emph{ждёт} \emph{у} \emph{двери}. \emph{Когда} \emph{первый}
+\emph{отпускает}~--- \emph{второй} \emph{входит}.
+\end{ideabox}
+
+\begin{warnbox}
+\textbf{Не} \emph{забывайте} \texttt{g\_mutex\_unlock()}. Если
+\emph{забыть}~--- \emph{другой} \emph{поток} \emph{зависнет}
+\emph{навсегда}. Это \emph{называется} \emph{deadlock}
+(\emph{взаимная} \emph{блокировка}).
+\end{warnbox}
+
+\section{Поток чтения осциллографа}
+\label{sec:pc-reader}
+
+\textbf{Теперь}~--- \emph{конкретно}. \emph{Как} \emph{работает}
+\emph{поток}, \emph{который} \emph{читает} \emph{порт}.
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+typedef struct {
+    int fd;
+    GMutex lock;
+    uint8_t buf[8192];
+    size_t have;
+    gboolean running;
+    GThread *thread;
+} OscReader;
+
+static gpointer osc_reader_thread(gpointer data)
+{
+    OscReader *r = data;
+
+    while (r->running) {
+        ssize_t n = read(r->fd, r->buf + r->have,
+                         sizeof(r->buf) - r->have);
+        if (n <= 0) {
+            g_usleep(1000);
+            continue;
+        }
+        r->have += n;
+        // ... парсинг кадров ...
+    }
+    return NULL;
+}
+\end{minted}
+\caption{\texttt{osc\_reader\_thread()}: поток чтения}
+\label{lst:pc-reader}
+\end{listing}
+
+\textbf{Что} \emph{здесь} \emph{важно}:
+\begin{itemize}
+    \item \texttt{running}~--- \emph{флаг}, \emph{который}
+          \emph{останавливает} \emph{поток}.
+    \item \texttt{read()} \emph{блокируется}. \emph{Пока} \emph{нет}
+          \emph{данных}~--- \emph{поток} \emph{спит}.
+    \item \texttt{g\_usleep(1000)}~--- \emph{если} \emph{ошибка}~
+          --- \emph{подождать} \emph{1} \emph{мс}, \emph{не}
+          \emph{жечь} \emph{CPU}.
+    \item \texttt{have}~--- \emph{сколько} \emph{байт} \emph{уже}
+          \emph{в} \emph{буфере} \emph{(данные} \emph{могут}
+          \emph{приходить} \emph{по} \emph{частям)}.
+\end{itemize}
+
+\section{Безопасное обновление UI}
+\label{sec:pc-idle}
+
+\textbf{Главная} \emph{проблема}: \emph{UI} \emph{нельзя} \emph{трогать}
+\emph{из} \emph{фонового} \emph{потока}. \emph{GTK} \emph{не}
+\emph{потокобезопасен}. \emph{Если} \emph{вызвать}
+\texttt{gtk\_widget\_queue\_draw()} \emph{из} \emph{потока}~---
+\emph{приложение} \emph{упадёт}.
+
+\textbf{Решение}~--- \texttt{g\_idle\_add()}. \emph{Он}
+\emph{выполняет} \emph{функцию} \emph{в} \emph{главном} \emph{потоке},
+\emph{когда} \emph{он} \emph{свободен}.
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+// Из фонового потока
+g_idle_add(on_ui_update, data);
+
+// В главном потоке
+static gboolean on_ui_update(gpointer data)
+{
+    // ... обновляем UI ...
+    gtk_widget_queue_draw(app->drawing_area);
+    return G_SOURCE_REMOVE;
+}
+\end{minted}
+\caption{\texttt{g\_idle\_add()}: безопасное обновление UI}
+\label{lst:pc-idle}
+\end{listing}
+
+\begin{keybox}
+\textbf{Правило}: \emph{из} \emph{фонового} \emph{потока}~---
+\emph{только} \texttt{g\_idle\_add()}. \emph{Всё} \emph{остальное}~
+--- \emph{в} \emph{главном} \emph{потоке}.
+\end{keybox}
+
+\section{Уроки главы (первая половина)}
+\label{sec:pc-lessons-so-far}
+
+\begin{enumerate}
+    \item \textbf{Один поток~--- плохо.} UI \emph{зависает}.
+    \item \textbf{Два потока~--- хорошо.} UI \emph{отзывчив},
+          фоновый \emph{читает}.
+    \item \textbf{Мьютекс~--- защита.} Общие данные~---
+          \emph{под} \emph{замком}.
+    \item \textbf{Не забывайте} \texttt{g\_mutex\_unlock()}.
+          Иначе~--- \emph{deadlock}.
+    \item \textbf{UI~--- только в главном потоке.}
+          Из \emph{фонового}~--- \emph{через} \texttt{g\_idle\_add()}.
+\end{enumerate}
+
+
+
+%%%%%===============================
+
+
+
+\section{Кольцо кадров на ПК}
+\label{sec:pc-ring}
+
+В \texttt{ch07} мы сделали \emph{кольцо} \emph{кадров} на
+STM32. \emph{Теперь}~--- \emph{то} \emph{же} \emph{самое} на ПК.
+\emph{Зачем}? Потому что \emph{данные} \emph{приходят} \emph{быстрее},
+чем \emph{рисуются}.
+
+\begin{ideabox}
+\textbf{Аналогия: почтовый ящик.} \emph{Курьер} (фоновый поток)
+\emph{бросает} \emph{письма} (кадры). \emph{Хозяин} (главный поток)
+\emph{читает} \emph{их}, \emph{когда} \emph{свободен}.
+\emph{Ящик}~--- \emph{кольцо}. \emph{Если} \emph{полон}~---
+\emph{старые} \emph{выбрасываются}.
+\end{ideabox}
+
+\subsection{Структура}
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+#define RING_SIZE 16
+
+typedef struct {
+    OscFrame frames[RING_SIZE];
+    volatile int write_idx;
+    volatile int read_idx;
+    volatile int dropped;
+    GMutex lock;
+} FrameRing;
+\end{minted}
+\caption{Кольцо кадров на ПК}
+\label{lst:pc-ring-struct}
+\end{listing}
+
+\textbf{Что} \emph{здесь} \emph{важно}:
+\begin{itemize}
+    \item \texttt{frames[RING\_SIZE]}~--- \emph{массив} \emph{кадров}.
+    \item \texttt{write\_idx}~--- \emph{куда} \emph{писать}
+          (\emph{фоновый} \emph{поток}).
+    \item \texttt{read\_idx}~--- \emph{откуда} \emph{читать}
+          (\emph{главный} \emph{поток}).
+    \item \texttt{dropped}~--- \emph{счётчик} \emph{потерь}.
+    \item \texttt{lock}~--- \emph{мьютекс} \emph{для}
+          \emph{защиты}.
+\end{itemize}
+
+\subsection{Запись и чтение}
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+// Фоновый поток
+bool ring_push(FrameRing *r, const OscFrame *f)
+{
+    g_mutex_lock(&r->lock);
+
+    int next = (r->write_idx + 1) % RING_SIZE;
+    if (next == r->read_idx) {
+        r->dropped++;
+        g_mutex_unlock(&r->lock);
+        return false;
+    }
+    r->frames[r->write_idx] = *f;
+    r->write_idx = next;
+
+    g_mutex_unlock(&r->lock);
+    return true;
+}
+
+// Главный поток
+bool ring_pop(FrameRing *r, OscFrame *out)
+{
+    g_mutex_lock(&r->lock);
+
+    if (r->read_idx == r->write_idx) {
+        g_mutex_unlock(&r->lock);
+        return false;
+    }
+    *out = r->frames[r->read_idx];
+    r->read_idx = (r->read_idx + 1) % RING_SIZE;
+
+    g_mutex_unlock(&r->lock);
+    return true;
+}
+\end{minted}
+\caption{\texttt{ring\_push()} и \texttt{ring\_pop()}}
+\label{lst:pc-ring-push-pop}
+\end{listing}
+
+\begin{keybox}
+\textbf{Мьютекс~--- обязателен.} \emph{Без} \emph{него}~---
+\emph{гонка} \emph{данных}: \emph{читатель} \emph{возьмёт}
+\emph{половину} \emph{нового} \emph{кадра} \emph{и}
+\emph{половину} \emph{старого}. \emph{График} \emph{<<сломается>>}.
+\end{keybox}
+
+\section{Полный поток чтения}
+\label{sec:pc-reader-full}
+
+\textbf{Теперь}~--- \emph{полный} \emph{код} \emph{потока}
+\emph{чтения}. \emph{Он} \emph{делает} \emph{три} \emph{вещи}:
+\emph{читает} \emph{байты}, \emph{парсит} \emph{кадры},
+\emph{кладёт} \emph{в} \emph{кольцо}.
+
+\begin{listing}[htbp]
+\begin{minted}[fontsize=\footnotesize, frame=none, bgcolor=gray!5]{c}
+static gpointer osc_reader_thread(gpointer data)
+{
+    AppData *app = data;
+    uint8_t buf[8192];
+    size_t have = 0;
+
+    while (app->thread_running) {
+        ssize_t n = read(app->fd_osc, buf + have,
+                         sizeof(buf) - have);
+        if (n <= 0) {
+            g_usleep(1000);
+            continue;
+        }
+        have += n;
+
+        // Парсим все полные кадры
+        while (have >= 8) {
+            if (!(buf[0] == 0x55 && buf[1] == 0xAA)) {
+                memmove(buf, buf + 1, have - 1);
+                have--;
+                continue;
+            }
+            uint16_t len = buf[6] | (buf[7] << 8);
+            size_t frame_len = 8 + len + 2;
+            if (have < frame_len) break;
+
+            // Проверка CRC
+            if (crc_ok(buf, frame_len)) {
+                OscFrame f;
+                parse_frame(buf, &f);
+                ring_push(&app->ring, &f);
+            }
+            memmove(buf, buf + frame_len,
+                    have - frame_len);
+            have -= frame_len;
+        }
+    }
+    return NULL;
+}
+\end{minted}
+\caption{\texttt{osc\_reader\_thread()}: полный цикл}
+\label{lst:pc-reader-full}
+\end{listing}
+
+\textbf{Что} \emph{здесь} \emph{важно}:
+\begin{itemize}
+    \item \textbf{Буфер} \emph{8} \emph{КБ}~--- \emph{достаточно}
+          \emph{для} \emph{нескольких} \emph{кадров}.
+    \item \textbf{Поиск} \emph{sync}~--- \emph{если} \emph{не}
+          \emph{нашли}, \emph{сдвигаем} \emph{на} \emph{1}
+          \emph{байт}.
+    \item \textbf{Ожидание} \emph{полного} \emph{кадра}~---
+          \emph{если} \emph{не} \emph{хватает} \emph{данных},
+          \emph{выходим} \emph{из} \emph{цикла}.
+    \item \textbf{CRC}~--- \emph{проверяем} \emph{целостность}.
+    \item \textbf{Кольцо}~--- \emph{кладём} \emph{готовый}
+          \emph{кадр}.
+\end{itemize}
+
+\begin{warnbox}
+\textbf{Буфер} \emph{может} \emph{переполниться}, \emph{если}
+\emph{кадры} \emph{приходят} \emph{быстрее}, \emph{чем}
+\emph{обрабатываются}. \emph{Решение}~--- \emph{увеличить}
+\emph{буфер} \emph{или} \emph{ускорить} \emph{обработку}.
+\end{warnbox}
+
+\section{Остановка потока}
+\label{sec:pc-stop}
+
+\textbf{Проблема}: \emph{поток} \emph{работает} \emph{вечно}.
+\emph{Как} \emph{его} \emph{остановить} \emph{при} \emph{выходе}?
+
+\textbf{Решение}~--- \texttt{g\_thread\_join()}.
+
+\begin{listing}[htbp]
+\begin{minted}[frame=none, bgcolor=gray!5]{c}
+// Остановка
+app->thread_running = false;   // 1. Флаг
+g_thread_join(app->thread);    // 2. Ждём завершения
+app->thread = NULL;
+\end{minted}
+\caption{Остановка потока}
+\label{lst:pc-stop}
+\end{listing}
+
+\textbf{Что} \emph{происходит}:
+\begin{enumerate}
+    \item \texttt{thread\_running = false}~--- \emph{поток}
+          \emph{увидит} \emph{флаг} \emph{и} \emph{выйдет}
+          \emph{из} \emph{цикла}.
+    \item \texttt{g\_thread\_join()}~--- \emph{главный}
+          \emph{поток} \emph{ждёт}, \emph{пока} \emph{фоновый}
+          \emph{завершится}.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Без} \texttt{g\_thread\_join()}~--- \emph{утечка}.
+\emph{Поток} \emph{может} \emph{обращаться} \emph{к}
+\emph{освобождённой} \emph{памяти}. \emph{Приложение}
+\emph{упадёт}.
+\end{keybox}
+
+\begin{ideabox}
+\textbf{Порядок} \emph{важен}: \emph{сначала} \emph{флаг},
+\emph{потом} \emph{join}. \emph{Наоборот}~--- \emph{поток}
+\emph{никогда} \emph{не} \emph{выйдет} \emph{из} \emph{цикла}.
+\end{ideabox}
+
+\section{Уроки главы}
+\label{sec:pc-lessons}
+
+\begin{enumerate}
+    \item \textbf{Один поток~--- плохо.} UI \emph{зависает}.
+    \item \textbf{Два потока~--- хорошо.} UI \emph{отзывчив},
+          фоновый \emph{читает}.
+    \item \textbf{Мьютекс~--- защита.} Общие данные~---
+          \emph{под} \emph{замком}.
+    \item \textbf{UI~--- только в главном потоке.}
+          Из \emph{фонового}~--- \emph{через} \texttt{g\_idle\_add()}.
+    \item \textbf{Кольцо кадров~--- на ПК тоже.}
+          \emph{Данные} \emph{приходят} \emph{быстрее}, \emph{чем}
+          \emph{рисуются}.
+    \item \textbf{Остановка потока~--- через}
+          \texttt{g\_thread\_join()}. \emph{Без} \emph{неё}~---
+          \emph{утечка}.
+\end{enumerate}
+
+\section{Чек-лист грабель}
+\label{sec:pc-pitfalls}
+
+\begin{table}[htbp]
+\centering
+\caption{Грабли многопоточности}
+\label{tab:pc-pitfalls}
+\small
+\begin{tabularx}{\textwidth}{@{}c L L@{}}
+\toprule
+\textbf{№} & \textbf{Грабля} & \textbf{Решение} \\
+\midrule
+1 & UI зависает & Чтение в отдельном потоке \\
+2 & Гонка данных & \texttt{GMutex} \\
+3 & Забыли \texttt{g\_mutex\_unlock()} & Deadlock \\
+4 & Обращение к UI из потока & \texttt{g\_idle\_add()} \\
+5 & Забыли \texttt{g\_thread\_join()} & Утечка \\
+6 & \texttt{thread\_running} не \texttt{volatile} & Поток не видит изменений \\
+7 & Кольцо переполнено & \texttt{dropped++} \\
+8 & Нет проверки CRC & Мусор в кадре \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Упражнения}
+\label{sec:pc-exercises}
+
+\begin{exercisebox}
+\textbf{Упражнение 1.} Что произойдёт, если \emph{убрать}
+\texttt{g\_mutex\_lock()} из \texttt{ring\_push()}? Приведите
+сценарий с \emph{гонкой}.
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 2.} Реализуйте \emph{два} фоновых потока:
+один читает \emph{осциллограф}, второй~--- \emph{генератор}.
+\emph{Как} \emph{разделить} \emph{мьютексы}?
+\end{exercisebox}
+
+\needspace{5\baselineskip}
+\begin{exercisebox}
+\textbf{Упражнение 3.} Добавьте \emph{счётчик} \emph{потерь}
+в \emph{статусбар}. Как \emph{обновлять} его \emph{без}
+\emph{блокировки} \emph{UI}?
+\end{exercisebox}
+
+\begin{exercisebox}
+\textbf{Упражнение 4.} Предложите способ \emph{ускорить}
+\emph{парсинг} \emph{кадров}, если \emph{данных} \emph{много}.
+\emph{Что} \emph{изменить} в \emph{буфере}?
+\end{exercisebox}
+
+\section{Проверьте сами}
+\label{sec:pc-check}
+
+\begin{enumerate}
+    \item Соберите \emph{ПК-приложение}.
+    \item Подключите \emph{Nucleo} с \emph{осциллографом}.
+    \item Запустите \emph{поток} \emph{чтения}.
+    \item \emph{Проверьте}, что \emph{UI} \emph{не} \emph{зависает}.
+    \item \emph{Остановите} \emph{поток}. \emph{Убедитесь}, что
+          \emph{приложение} \emph{закрывается} \emph{чисто}.
+    \item \emph{Сделайте} \emph{скриншот}~--- \emph{пришлите}
+          \emph{в} \emph{книгу}.
+\end{enumerate}
+
+\begin{ideabox}
+\textbf{Если получилось~--- вы поняли многопоточность.}
+Это \emph{главное}. Дальше~--- \emph{отрисовка} \emph{графика},
+\emph{интерфейс} \emph{генератора}. \emph{Всё} \emph{впереди}.
+\end{ideabox}
+
